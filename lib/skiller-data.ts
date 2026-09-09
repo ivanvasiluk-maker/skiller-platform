@@ -88,6 +88,76 @@ const seedSkills = [
       { title: "Закрепите", copy: "Коротко скажите, чем это поможет вам обоим." },
     ]),
   },
+  {
+    id: "distract-delay",
+    title: "Отложить отвлечение",
+    approach: "CBT · управление отвлечением",
+    track: "Работа и фокус",
+    description: "Запишите отвлекающий импульс и отложите его на короткий, заранее выбранный интервал.",
+    why: "Не запрещает отвлечение, но возвращает выбор и сохраняет контакт с задачей.",
+    durationSeconds: 120,
+    stepsJson: JSON.stringify([
+      { title: "Назовите отвлечение", copy: "Куда именно хочется переключиться?" },
+      { title: "Запишите", copy: "Сохраните мысль или действие в список «позже»." },
+      { title: "Назначьте время", copy: "Вернитесь к задаче на пять минут, затем решите заново." },
+    ]),
+  },
+  {
+    id: "check-facts",
+    title: "Проверить факты",
+    approach: "DBT · регуляция эмоций",
+    track: "Эмоции и мышление",
+    description: "Отделите наблюдаемые факты от догадок и проверьте, соответствует ли сила эмоции ситуации.",
+    why: "Полезно, когда реакцию усиливает интерпретация, которую пока нельзя считать фактом.",
+    durationSeconds: 180,
+    stepsJson: JSON.stringify([
+      { title: "Назовите эмоцию", copy: "Что вы чувствуете и насколько сильно?" },
+      { title: "Отделите факты", copy: "Что можно было бы записать на камеру без толкования?" },
+      { title: "Проверьте вывод", copy: "Какие ещё объяснения согласуются с фактами?" },
+    ]),
+  },
+  {
+    id: "urge-surfing",
+    title: "Переждать волну импульса",
+    approach: "ACT / mindfulness · работа с импульсом",
+    track: "Стабилизация",
+    description: "Наблюдайте импульс как меняющуюся волну, не выполняя и не подавляя его автоматически.",
+    why: "Создаёт расстояние между позывом и действием, когда борьба с импульсом только усиливает его.",
+    durationSeconds: 180,
+    stepsJson: JSON.stringify([
+      { title: "Найдите ощущение", copy: "Где импульс заметнее всего в теле?" },
+      { title: "Следите за волной", copy: "Отмечайте усиление, пик и ослабление без оценки." },
+      { title: "Выберите действие", copy: "Что соответствует вашей цели после этой паузы?" },
+    ]),
+  },
+  {
+    id: "validate-first",
+    title: "Сначала подтвердить понятное",
+    approach: "DBT · межличностная эффективность",
+    track: "Отношения и границы",
+    description: "Перед своей позицией назовите, что в реакции другого человека можно понять, не соглашаясь со всем.",
+    why: "Снижает борьбу за правоту и помогает сохранить контакт, если отношения сейчас важнее победы в споре.",
+    durationSeconds: 150,
+    stepsJson: JSON.stringify([
+      { title: "Найдите понятное", copy: "Какая часть реакции логична с точки зрения другого?" },
+      { title: "Скажите без «но»", copy: "Одно предложение подтверждения без немедленного возражения." },
+      { title: "Добавьте свою цель", copy: "После паузы коротко скажите, чего хотите от разговора." },
+    ]),
+  },
+  {
+    id: "grounding-543",
+    title: "Вернуться в настоящее",
+    approach: "Mindfulness · ориентирование",
+    track: "Стабилизация",
+    description: "Переведите внимание на конкретные детали вокруг, чтобы восстановить контакт с текущим моментом.",
+    why: "Подходит, когда телесное напряжение мешает анализировать ситуацию, но риск не требует экстренной помощи.",
+    durationSeconds: 120,
+    stepsJson: JSON.stringify([
+      { title: "Пять вещей", copy: "Назовите пять предметов, которые видите." },
+      { title: "Четыре ощущения", copy: "Заметьте четыре точки контакта тела с опорой или одеждой." },
+      { title: "Три звука", copy: "Назовите три звука и затем один безопасный следующий шаг." },
+    ]),
+  },
 ] as const;
 
 export async function ensureUser(user: ChatGPTUser) {
@@ -155,26 +225,70 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
   };
 }
 
-export async function recommendSkill(user: ChatGPTUser, input: { kind: string; description: string; intensity: number; risk: string }) {
+type RecommendationInput = {
+  kind: string;
+  description: string;
+  firstSignal: string;
+  actionUrge: string;
+  desiredDirection: string;
+  importantGoal: string;
+  intensity: number;
+  risk: string;
+};
+
+function selectSkill(input: RecommendationInput) {
+  if (input.intensity >= 8 || input.desiredDirection === "stabilize") {
+    return input.firstSignal === "body"
+      ? { skillId: "grounding-543", changePoint: "телесное напряжение до анализа", reason: "Сначала нужно вернуть контакт с настоящим, а затем решать проблему." }
+      : { skillId: "stop", changePoint: "между импульсом и действием", reason: "При высокой интенсивности важнее восстановить возможность выбирать действие." };
+  }
+  if (input.kind === "conflict") {
+    return input.desiredDirection === "relationship"
+      ? { skillId: "validate-first", changePoint: "первые слова в разговоре", reason: "Цель — сохранить контакт, поэтому начинаем с подтверждения понятной части реакции другого." }
+      : { skillId: "dear-man", changePoint: "формулировка просьбы", reason: "Сейчас важнее ясно обозначить цель разговора и конкретное действие." };
+  }
+  if (input.kind === "stuck") {
+    return input.actionUrge === "distract"
+      ? { skillId: "distract-delay", changePoint: "момент переключения", reason: "Проблему поддерживает автоматическое отвлечение, поэтому тренируем отсрочку, а не запрет." }
+      : { skillId: "micro-start", changePoint: "вход в действие", reason: "Сложность находится перед началом, поэтому уменьшаем первый шаг, сохраняя движение к цели." };
+  }
+  if (input.firstSignal === "thought") {
+    return { skillId: "check-facts", changePoint: "интерпретация ситуации", reason: "Эмоцию усиливает мысль; сначала отделим наблюдаемые факты от предположений." };
+  }
+  if (input.firstSignal === "urge") {
+    return { skillId: "urge-surfing", changePoint: "реакция на импульс", reason: "Нужно переждать волну импульса, не подавляя её и не действуя автоматически." };
+  }
+  return { skillId: "grounding-543", changePoint: "возвращение внимания", reason: "Сначала восстанавливаем контакт с настоящим, затем выбираем действие по цели." };
+}
+
+export async function recommendSkill(user: ChatGPTUser, input: RecommendationInput) {
   await ensureUser(user);
   await ensureSkillCatalog();
   const db = getDb();
   const situationId = crypto.randomUUID();
   const unsafe = input.risk !== "no";
+  const selection = unsafe
+    ? { skillId: "", changePoint: "проверка безопасности", reason: "При возможном риске автоматический подбор навыков прекращается." }
+    : selectSkill(input);
   await db.insert(situations).values({
     id: situationId,
     userId: user.userId,
     kind: input.kind,
     description: input.description.slice(0, 1200),
+    firstSignal: input.firstSignal,
+    actionUrge: input.actionUrge,
+    desiredDirection: input.desiredDirection,
+    importantGoal: input.importantGoal.slice(0, 500),
+    changePoint: selection.changePoint,
+    recommendationReason: selection.reason,
     intensity: Math.max(1, Math.min(10, input.intensity)),
     safetyStatus: unsafe ? "escalate" : "self-guided",
   });
   if (unsafe) return { situationId, safetyStatus: "escalate" as const, skill: null };
 
-  const skillId = input.kind === "conflict" ? "dear-man" : input.kind === "emotion" || input.intensity >= 8 ? "stop" : "micro-start";
-  const skill = await db.select().from(skills).where(and(eq(skills.id, skillId), eq(skills.active, true))).get();
+  const skill = await db.select().from(skills).where(and(eq(skills.id, selection.skillId), eq(skills.active, true))).get();
   if (!skill) throw new Error("Skill catalog is unavailable");
-  return { situationId, safetyStatus: "self-guided" as const, skill: toSkillView(skill) };
+  return { situationId, safetyStatus: "self-guided" as const, skill: toSkillView(skill), changePoint: selection.changePoint, reason: selection.reason };
 }
 
 export async function startAttempt(user: ChatGPTUser, input: { skillId: string; situationId?: string; mode: string }) {

@@ -13,6 +13,10 @@ export async function POST(request: Request) {
       return Response.json(await recommendSkill(user, {
         kind: String(body.kind ?? "other"),
         description: String(body.description ?? ""),
+        firstSignal: String(body.firstSignal ?? "emotion"),
+        actionUrge: String(body.actionUrge ?? "pause"),
+        desiredDirection: String(body.desiredDirection ?? "goal"),
+        importantGoal: String(body.importantGoal ?? ""),
         intensity: Number(body.intensity ?? 5),
         risk: String(body.risk ?? "unknown"),
       }));
