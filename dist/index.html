@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#132348" />
+    <meta
+      name="description"
+      content="SKILLER — персональная система психологических навыков"
+    />
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+    <title>SKILLER</title>
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <button class="brand" type="button" data-go="today" aria-label="На главный экран">
+          <span class="brand-mark">S</span>
+          <span>SKILLER</span>
+        </button>
+        <button class="profile-button" type="button" data-toast="Профиль появится на следующем этапе">
+          <span class="profile-copy">
+            <strong>Иван</strong>
+            <small>4 дня практики</small>
+          </span>
+          <span class="avatar" aria-hidden="true">И</span>
+        </button>
+      </header>
+
+      <nav class="primary-nav" aria-label="Основная навигация">
+        <button class="nav-item active" type="button" data-screen="today" aria-current="page">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10.5 12 4l8 6.5V20H4v-9.5Z"/><path d="M9 20v-6h6v6"/></svg>
+          <span>Сегодня</span>
+        </button>
+        <button class="nav-item" type="button" data-screen="help">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m13 2-8 12h7l-1 8 8-12h-7l1-8Z"/></svg>
+          <span>Сейчас</span>
+        </button>
+        <button class="nav-item" type="button" data-screen="practice">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 9v6M17 9v6M4 11v2M20 11v2M7 12h10"/></svg>
+          <span>Тренировка</span>
+        </button>
+        <button class="nav-item" type="button" data-screen="protocol">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v16H5z"/><path d="M8 8h8M8 12h5M8 16h7"/></svg>
+          <span>Протокол</span>
+        </button>
+        <button class="nav-item" type="button" data-screen="psychologist">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M5 21c.5-5 3-7 7-7s6.5 2 7 7"/></svg>
+          <span>Психолог</span>
+        </button>
+      </nav>
+
+      <main class="main-content">
+        <section class="screen active" id="screen-today" aria-labelledby="today-title">
+          <div class="screen-heading">
+            <div>
+              <p class="eyebrow">СРЕДА, 9 СЕНТЯБРЯ</p>
+              <h1 id="today-title">Что важно сегодня?</h1>
+            </div>
+            <div class="streak" aria-label="Практика четыре дня подряд">
+              <span>4</span>
+              <small>дня</small>
+            </div>
+          </div>
+
+          <article class="focus-card">
+            <div class="focus-orb focus-orb-one"></div>
+            <div class="focus-orb focus-orb-two"></div>
+            <div class="card-row">
+              <span class="pill pill-light">Активный эксперимент</span>
+              <span class="confidence">уверенность 68%</span>
+            </div>
+            <p class="focus-context">Когда задача кажется слишком большой</p>
+            <h2>Начать с минимального законченного действия</h2>
+            <p class="focus-copy">Не «поработать над отчётом», а открыть файл и написать одну черновую строку.</p>
+            <div class="focus-bottom">
+              <div class="attempts">
+                <span class="attempt done"></span>
+                <span class="attempt done"></span>
+                <span class="attempt"></span>
+                <span class="attempt"></span>
+                <span class="attempt"></span>
+                <small><strong id="attempt-count">2</strong> из 5 проверок</small>
+              </div>
+              <button class="button button-white" type="button" data-start-skill="micro-start">
+                Начать · 2 минуты
+              </button>
+            </div>
+          </article>
+
+          <div class="quick-actions">
+            <button class="quick-action urgent" type="button" data-go="help">
+              <span class="quick-icon">⚡</span>
+              <span><strong>Помощь сейчас</strong><small>Разобрать текущую ситуацию</small></span>
+              <span class="arrow">→</span>
+            </button>
+            <button class="quick-action" type="button" data-go="practice">
+              <span class="quick-icon cool">◎</span>
+              <span><strong>Потренироваться</strong><small>Заранее, без сильного стресса</small></span>
+              <span class="arrow">→</span>
+            </button>
+          </div>
+
+          <div class="section-title">
+            <h2>Ваша система становится точнее</h2>
+            <button type="button" class="text-button" data-go="protocol">Открыть карту</button>
+          </div>
+
+          <div class="metric-grid">
+            <article class="metric-card">
+              <strong id="experiment-total">8</strong>
+              <span>экспериментов</span>
+              <small>за 14 дней</small>
+            </article>
+            <article class="metric-card accent-metric">
+              <strong>3</strong>
+              <span>рабочих навыка</span>
+              <small>в разных ситуациях</small>
+            </article>
+            <article class="metric-card wide-metric">
+              <div>
+                <span>Выполнение</span>
+                <strong id="completion-rate">72%</strong>
+              </div>
+              <div class="progress-track"><span style="width: 72%"></span></div>
+              <small>Лучше получается утром и при интенсивности до 6 из 10.</small>
+            </article>
+          </div>
+
+          <article class="continuation-card">
+            <div class="continuation-icon">↗</div>
+            <div>
+              <span class="muted-label">Продолжить вчерашнее</span>
+              <h3>Просьба без оправданий</h3>
+              <p>Репетиция DEAR MAN · 4 минуты</p>
+            </div>
+            <button class="icon-button" type="button" data-start-skill="dear-man" aria-label="Начать репетицию">→</button>
+          </article>
+        </section>
+
+        <section class="screen" id="screen-help" aria-labelledby="help-title">
+          <div class="screen-heading compact-heading">
+            <div>
+              <p class="eyebrow">БОЕВОЙ РЕЖИМ</p>
+              <h1 id="help-title">Что происходит сейчас?</h1>
+              <p class="heading-copy">Одна конкретная ситуация. Система предложит только один посильный следующий шаг.</p>
+            </div>
+          </div>
+
+          <form class="situation-form" id="situation-form">
+            <fieldset>
+              <legend>На что это больше похоже?</legend>
+              <div class="choice-grid" id="situation-types">
+                <button class="choice active" type="button" data-kind="stuck"><span>↗</span>Я застрял</button>
+                <button class="choice" type="button" data-kind="emotion"><span>≈</span>Сильная эмоция</button>
+                <button class="choice" type="button" data-kind="conflict"><span>⇄</span>Конфликт</button>
+                <button class="choice" type="button" data-kind="other"><span>＋</span>Другое</button>
+              </div>
+            </fieldset>
+
+            <label class="field-label" for="situation-text">Опишите момент одним-двумя предложениями</label>
+            <textarea id="situation-text" rows="4" placeholder="Например: уже час смотрю на задачу и открываю новости вместо первого шага"></textarea>
+
+            <div class="range-block">
+              <div class="range-copy">
+                <label for="intensity">Насколько сильно накрывает?</label>
+                <output for="intensity" id="intensity-output">6 из 10</output>
+              </div>
+              <input id="intensity" type="range" min="1" max="10" value="6" />
+              <div class="range-ends"><span>Можно думать</span><span>Очень сильно</span></div>
+            </div>
+
+            <fieldset class="safety-check">
+              <legend>Есть ли сейчас риск причинить вред себе или кому-то либо потерять контроль?</legend>
+              <p>Это определяет, может ли SKILLER продолжать самостоятельный сценарий.</p>
+              <div class="segmented" id="safety-choice">
+                <button class="active" type="button" data-risk="no">Нет</button>
+                <button type="button" data-risk="yes">Да / не уверен</button>
+              </div>
+            </fieldset>
+
+            <button class="button button-primary full-button" type="submit">Подобрать следующий шаг</button>
+          </form>
+
+          <article class="recommendation-card hidden" id="recommendation" aria-live="polite">
+            <div class="recommendation-top">
+              <span class="pill pill-blue">Подходит к ситуации</span>
+              <span class="duration">90–120 секунд</span>
+            </div>
+            <p class="muted-label" id="recommendation-approach">CBT · поведенческий навык</p>
+            <h2 id="recommendation-title">Минимальный законченный старт</h2>
+            <p id="recommendation-copy">Выберите действие, которое оставит наблюдаемый след и займёт не больше двух минут.</p>
+            <div class="why-box">
+              <strong>Почему сейчас</strong>
+              <p id="recommendation-why">При такой интенсивности лучше снизить сложность входа, но сохранить движение к задаче.</p>
+            </div>
+            <button class="button button-primary full-button" type="button" id="start-recommendation">Начать навык</button>
+            <button class="text-button centered" type="button" data-toast="Причину отказа запишем как данные, а не как провал">Не подходит</button>
+          </article>
+
+          <article class="live-help-card hidden" id="live-help" aria-live="assertive">
+            <span class="live-help-icon">!</span>
+            <div>
+              <p class="eyebrow">НУЖНА ЖИВАЯ ПОМОЩЬ</p>
+              <h2>SKILLER не продолжит автоматический подбор</h2>
+              <p>Перейдите в более безопасное место и свяжитесь с человеком, который может быть рядом. При непосредственной опасности обратитесь в местную экстренную службу.</p>
+              <button class="button button-danger" type="button" data-toast="Здесь будет ваш заранее сохранённый план безопасности">Открыть план безопасности</button>
+            </div>
+          </article>
+        </section>
+
+        <section class="screen" id="screen-practice" aria-labelledby="practice-title">
+          <div class="screen-heading compact-heading">
+            <div>
+              <p class="eyebrow">ТРЕНИРОВОЧНЫЙ РЕЖИМ</p>
+              <h1 id="practice-title">Навыки до сложного момента</h1>
+              <p class="heading-copy">Короткие репетиции, чтобы нужное действие было доступно под нагрузкой.</p>
+            </div>
+            <div class="weekly-ring"><strong>4</strong><small>из 7</small></div>
+          </div>
+
+          <article class="weekly-card">
+            <div>
+              <span class="pill pill-mint">Фокус недели</span>
+              <p class="muted-label">Межличностная эффективность</p>
+              <h2>Сформулировать просьбу без оправданий</h2>
+              <p>Соберите DEAR MAN на безопасном примере, затем перенесите структуру в реальный разговор.</p>
+            </div>
+            <div class="weekly-card-footer">
+              <span>4 минуты</span>
+              <button class="button button-dark" type="button" data-start-skill="dear-man">Начать репетицию</button>
+            </div>
+          </article>
+
+          <div class="section-title"><h2>Параллельные дорожки</h2><span class="count-label">3 активны</span></div>
+          <div class="track-list">
+            <article class="track-card">
+              <div class="track-number indigo">01</div>
+              <div class="track-body">
+                <div class="card-row"><h3>Стабилизация</h3><strong>3/4</strong></div>
+                <p>Пауза перед импульсивным действием</p>
+                <div class="progress-track"><span style="width: 75%"></span></div>
+                <small>Следующее: STOP в разговоре</small>
+              </div>
+            </article>
+            <article class="track-card">
+              <div class="track-number mint">02</div>
+              <div class="track-body">
+                <div class="card-row"><h3>Отношения и границы</h3><strong>1/3</strong></div>
+                <p>Просить, отказывать, сохранять отношения</p>
+                <div class="progress-track mint-progress"><span style="width: 34%"></span></div>
+                <small>Сегодня: репетиция просьбы</small>
+              </div>
+            </article>
+            <article class="track-card">
+              <div class="track-number amber">03</div>
+              <div class="track-body">
+                <div class="card-row"><h3>Работа и фокус</h3><strong>4/5</strong></div>
+                <p>Начинать и возвращаться после отвлечения</p>
+                <div class="progress-track amber-progress"><span style="width: 80%"></span></div>
+                <small>Проверить навык ещё в одном контексте</small>
+              </div>
+            </article>
+          </div>
+
+          <article class="learning-note">
+            <span>i</span>
+            <p><strong>Навык считается освоенным не после просмотра.</strong> Нужны успешные применения в нескольких реальных ситуациях.</p>
+          </article>
+        </section>
+
+        <section class="screen" id="screen-protocol" aria-labelledby="protocol-title">
+          <div class="screen-heading compact-heading">
+            <div>
+              <p class="eyebrow">МОЙ ПРОТОКОЛ</p>
+              <h1 id="protocol-title">Что работает именно для вас</h1>
+              <p class="heading-copy">Не диагноз и не тип личности — карта проверенных действий и границ их применимости.</p>
+            </div>
+          </div>
+
+          <div class="protocol-summary">
+            <div class="protocol-score"><strong>68</strong><span>%</span></div>
+            <div>
+              <p class="muted-label">ТОЧНОСТЬ КАРТЫ</p>
+              <h2>Появились первые устойчивые закономерности</h2>
+              <p>Ещё 3–4 проверки в новых контекстах повысят уверенность.</p>
+            </div>
+          </div>
+
+          <div class="legend" aria-label="Типы данных">
+            <span><i class="legend-dot fact"></i>Наблюдение</span>
+            <span><i class="legend-dot hypothesis"></i>Гипотеза системы</span>
+            <span><i class="legend-dot clinician"></i>Вывод психолога</span>
+          </div>
+
+          <div class="protocol-list">
+            <article class="protocol-card best">
+              <div class="protocol-card-top">
+                <div><span class="status-label">Работает стабильно</span><h2>Минимальный законченный старт</h2></div>
+                <span class="score-chip">82%</span>
+              </div>
+              <p>Помогает начать задачи при интенсивности до 6 из 10, особенно утром.</p>
+              <div class="evidence-row">
+                <span>4 применения</span><span>3 контекста</span><span>низкая цена</span>
+              </div>
+              <div class="protocol-insight fact-insight"><i></i><span><strong>Наблюдение:</strong> после старта вы продолжали работу дольше запланированных двух минут в 3 случаях из 4.</span></div>
+            </article>
+
+            <article class="protocol-card">
+              <div class="protocol-card-top">
+                <div><span class="status-label testing">Проверяем</span><h2>STOP перед ответом</h2></div>
+                <span class="score-chip testing-score">61%</span>
+              </div>
+              <p>Уменьшает импульсивность в переписке. Для очного конфликта данных пока мало.</p>
+              <div class="evidence-row"><span>2 применения</span><span>1 контекст</span><span>средняя цена</span></div>
+              <div class="protocol-insight hypothesis-insight"><i></i><span><strong>Гипотеза:</strong> навык лучше работает, если заранее подготовлена короткая фраза для паузы.</span></div>
+            </article>
+
+            <article class="protocol-card weak">
+              <div class="protocol-card-top">
+                <div><span class="status-label weak-label">Не подошло сейчас</span><h2>Дыхание 4–6</h2></div>
+                <span class="score-chip weak-score">24%</span>
+              </div>
+              <p>Снижало напряжение, но дважды усилило откладывание важного разговора.</p>
+              <div class="evidence-row"><span>3 применения</span><span>2 избегания</span><span>эффект краткий</span></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="screen" id="screen-psychologist" aria-labelledby="psychologist-title">
+          <div class="screen-heading compact-heading">
+            <div>
+              <p class="eyebrow">СОВМЕСТНАЯ РАБОТА</p>
+              <h1 id="psychologist-title">Психолог видит только то, что вы разрешили</h1>
+              <p class="heading-copy">Доступ можно изменить или отозвать в любой момент.</p>
+            </div>
+          </div>
+
+          <article class="access-card">
+            <div class="access-person">
+              <div class="clinician-avatar">А</div>
+              <div><span class="muted-label">ПОДКЛЮЧЁННЫЙ СПЕЦИАЛИСТ</span><h2>Анна Петрова</h2><p>Психолог · доступ до 30 сентября</p></div>
+            </div>
+            <label class="switch"><input type="checkbox" checked id="master-access" /><span></span><em>Доступ включён</em></label>
+          </article>
+
+          <div class="section-title"><h2>Что доступно психологу</h2><button class="text-button" type="button" data-toast="Все изменения доступа сохраняются в журнале">Журнал доступа</button></div>
+          <div class="permission-list">
+            <label class="permission"><span><strong>Попытки и результаты</strong><small>Навык, ситуация, выполнение и эффект</small></span><input type="checkbox" checked /></label>
+            <label class="permission"><span><strong>Личный протокол</strong><small>Рабочие навыки и гипотезы системы</small></span><input type="checkbox" checked /></label>
+            <label class="permission"><span><strong>Тексты дневника</strong><small>Ваши свободные записи и детали ситуаций</small></span><input type="checkbox" /></label>
+            <label class="permission"><span><strong>План безопасности</strong><small>Открывается только отдельным согласием</small></span><input type="checkbox" /></label>
+          </div>
+
+          <article class="clinician-note">
+            <div class="clinician-note-head"><span class="clinician-avatar small-avatar">А</span><div><strong>Последняя корректировка</strong><small>Сегодня, 10:30</small></div></div>
+            <p>«На этой неделе проверьте микростарт вечером. Хочу понять, зависит ли эффект от времени суток или от сложности задачи».</p>
+          </article>
+
+          <div class="human-help-card">
+            <div><span class="pill pill-light">Если своего психолога нет</span><h2>Разобрать карту со специалистом</h2><p>30 минут на интерпретацию данных и корректировку ближайшего маршрута.</p></div>
+            <button class="button button-white" type="button" data-toast="Откроем выбор специалиста и времени">Выбрать время</button>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="sheet-backdrop hidden" id="practice-sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+      <div class="practice-sheet">
+        <button class="sheet-close" type="button" id="close-sheet" aria-label="Закрыть">×</button>
+        <span class="pill pill-blue" id="sheet-mode">Практика в ситуации</span>
+        <p class="muted-label" id="sheet-approach">CBT · ПОВЕДЕНЧЕСКИЙ НАВЫК</p>
+        <h2 id="sheet-title">Минимальный законченный старт</h2>
+        <p id="sheet-description">Откройте нужный файл и оставьте в нём одну черновую строку. Не улучшайте её.</p>
+        <ol class="skill-steps" id="skill-steps">
+          <li><span>1</span><p><strong>Назовите след</strong>Что должно остаться после действия?</p></li>
+          <li><span>2</span><p><strong>Уменьшите до двух минут</strong>Оставьте только начало, которое можно увидеть.</p></li>
+          <li><span>3</span><p><strong>Сделайте без улучшения</strong>Цель — проверить вход, а не закончить задачу.</p></li>
+        </ol>
+        <div class="timer" id="timer">02:00</div>
+        <button class="button button-primary full-button" type="button" id="finish-skill">Готово — записать результат</button>
+        <button class="text-button centered" type="button" id="too-hard">Сейчас слишком сложно</button>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script src="./app.js"></script>
+  </body>
+</html>

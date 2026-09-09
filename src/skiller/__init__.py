@@ -1,0 +1,2 @@
+"""SKILLER platform domain core."""
+
