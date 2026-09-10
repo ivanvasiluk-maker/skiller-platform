@@ -1,6 +1,8 @@
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb } from "@/db";
 import {
+  delayedOutcomes,
+  onboardingProfiles,
   outcomes,
   personalSkillEvidence,
   psychologistAccess,
@@ -34,13 +36,48 @@ export type ProtocolItem = {
   relief: number | null;
   avoidanceCount: number;
   confidence: number;
+  delayedFollowups: number;
+  contextCount: number;
   status: "working" | "testing" | "uncertain";
+};
+
+export type OnboardingProfile = {
+  focus: string;
+  goal: string;
+  practiceStyle: string;
+  supportMode: string;
+  safetyAcknowledged: boolean;
+};
+
+export type HistoryItem = {
+  attemptId: string;
+  skillTitle: string;
+  track: string;
+  situationKind: string | null;
+  mode: string;
+  completedAt: string;
+  immediate: { reliefDelta: number; goalProgress: number; helpfulness: number; avoidance: boolean; note: string } | null;
+  delayed: { goalProgress: number; helpfulness: number; avoidance: boolean; note: string; createdAt: string } | null;
+};
+
+export type PendingCheckIn = {
+  attemptId: string;
+  skillTitle: string;
+  completedAt: string;
+  immediateGoalProgress: number;
 };
 
 export type DashboardData = {
   user: { displayName: string; email: string };
   skills: SkillView[];
   protocol: ProtocolItem[];
+  onboarding: OnboardingProfile | null;
+  suggestedSkillId: string;
+  pendingCheckIn: PendingCheckIn | null;
+  history: HistoryItem[];
+  suggestedSkillId: string;
+  pendingCheckIn: PendingCheckIn | null;
+  history: HistoryItem[];
   stats: { attempts: number; completions: number; completionRate: number };
   access: { sharingEnabled: boolean; shareProtocol: boolean; shareAttempts: boolean; shareNotes: boolean };
 };
@@ -184,7 +221,7 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
   await ensureUser(user);
   await ensureSkillCatalog();
   const db = getDb();
-  const [skillRows, evidenceRows, attemptStats, accessRow] = await Promise.all([
+  const [skillRows, evidenceRows, attemptStats, accessRow, onboardingRow, historyRows, evidenceContextRows] = await Promise.all([
     db.select().from(skills).where(eq(skills.active, true)),
     db
       .select({ evidence: personalSkillEvidence, skill: skills })
@@ -200,26 +237,135 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
       .from(skillAttempts)
       .where(eq(skillAttempts.userId, user.userId)),
     db.select().from(psychologistAccess).where(eq(psychologistAccess.userId, user.userId)).get(),
+    db.select().from(onboardingProfiles).where(eq(onboardingProfiles.userId, user.userId)).get(),
+    db
+      .select({
+        attemptId: skillAttempts.id,
+        skillId: skillAttempts.skillId,
+        skillTitle: skills.title,
+        track: skills.track,
+        situationKind: situations.kind,
+        mode: skillAttempts.mode,
+        completedAt: skillAttempts.completedAt,
+        reliefDelta: outcomes.reliefDelta,
+        immediateGoalProgress: outcomes.goalProgress,
+        immediateHelpfulness: outcomes.helpfulness,
+        immediateAvoidance: outcomes.avoidance,
+        immediateNote: outcomes.note,
+        delayedGoalProgress: delayedOutcomes.goalProgress,
+        delayedHelpfulness: delayedOutcomes.helpfulness,
+        delayedAvoidance: delayedOutcomes.avoidance,
+        delayedNote: delayedOutcomes.note,
+        delayedCreatedAt: delayedOutcomes.createdAt,
+      })
+      .from(skillAttempts)
+      .innerJoin(skills, eq(skillAttempts.skillId, skills.id))
+      .leftJoin(situations, eq(skillAttempts.situationId, situations.id))
+      .leftJoin(outcomes, eq(skillAttempts.id, outcomes.attemptId))
+      .leftJoin(delayedOutcomes, eq(skillAttempts.id, delayedOutcomes.attemptId))
+      .where(and(eq(skillAttempts.userId, user.userId), eq(skillAttempts.status, "completed")))
+      .orderBy(desc(skillAttempts.completedAt))
+      .limit(40),
+    db
+      .select({
+        skillId: skillAttempts.skillId,
+        contextCount: sql<number>`count(distinct coalesce(${situations.kind}, ${skillAttempts.mode}))`,
+        delayedFollowups: sql<number>`sum(case when ${delayedOutcomes.id} is not null then 1 else 0 end)`,
+        delayedGoalSum: sql<number>`sum(coalesce(${delayedOutcomes.goalProgress}, 0))`,
+        delayedHelpfulSum: sql<number>`sum(coalesce(${delayedOutcomes.helpfulness}, 0))`,
+        delayedAvoidanceCount: sql<number>`sum(case when ${delayedOutcomes.avoidance} = 1 then 1 else 0 end)`,
+      })
+      .from(skillAttempts)
+      .leftJoin(situations, eq(skillAttempts.situationId, situations.id))
+      .leftJoin(delayedOutcomes, eq(skillAttempts.id, delayedOutcomes.attemptId))
+      .where(and(eq(skillAttempts.userId, user.userId), eq(skillAttempts.status, "completed")))
+      .groupBy(skillAttempts.skillId),
   ]);
 
   const attempts = Number(attemptStats[0]?.attempts ?? 0);
   const completions = Number(attemptStats[0]?.completions ?? 0);
+  const contextBySkill = new Map(evidenceContextRows.map((row) => [row.skillId, {
+    contextCount: Number(row.contextCount ?? 0),
+    delayedFollowups: Number(row.delayedFollowups ?? 0),
+    delayedGoalSum: Number(row.delayedGoalSum ?? 0),
+    delayedHelpfulSum: Number(row.delayedHelpfulSum ?? 0),
+    delayedAvoidanceCount: Number(row.delayedAvoidanceCount ?? 0),
+  }]));
+  const history: HistoryItem[] = historyRows.filter((row) => row.completedAt).map((row) => ({
+    attemptId: row.attemptId,
+    skillTitle: row.skillTitle,
+    track: row.track,
+    situationKind: row.situationKind,
+    mode: row.mode,
+    completedAt: row.completedAt!,
+    immediate: row.immediateGoalProgress === null ? null : {
+      reliefDelta: Number(row.reliefDelta ?? 0),
+      goalProgress: Number(row.immediateGoalProgress),
+      helpfulness: Number(row.immediateHelpfulness ?? 0),
+      avoidance: Boolean(row.immediateAvoidance),
+      note: row.immediateNote ?? "",
+    },
+    delayed: row.delayedGoalProgress === null ? null : {
+      goalProgress: Number(row.delayedGoalProgress),
+      helpfulness: Number(row.delayedHelpfulness ?? 0),
+      avoidance: Boolean(row.delayedAvoidance),
+      note: row.delayedNote ?? "",
+      createdAt: row.delayedCreatedAt ?? row.completedAt!,
+    },
+  }));
+  const pendingRow = history.find((item) => !item.delayed && Date.now() - Date.parse(item.completedAt) >= 6 * 60 * 60 * 1000);
+  const focusSkill: Record<string, string> = {
+    start: "micro-start",
+    emotions: "check-facts",
+    relationships: "validate-first",
+    impulses: "urge-surfing",
+    loneliness: "dear-man",
+  };
   return {
     user: { displayName: user.displayName, email: user.email },
     skills: skillRows.map(toSkillView),
-    protocol: evidenceRows.map(({ evidence, skill }) => ({
-      skillId: skill.id,
-      title: skill.title,
-      track: skill.track,
-      attempts: evidence.attempts,
-      completions: evidence.completions,
-      helpfulness: evidence.completions ? Math.round((evidence.helpfulSum / evidence.completions) * 10) / 10 : null,
-      goalProgress: evidence.completions ? Math.round((evidence.goalSum / evidence.completions) * 10) / 10 : null,
-      relief: evidence.completions ? Math.round((evidence.reliefSum / evidence.completions) * 10) / 10 : null,
-      avoidanceCount: evidence.avoidanceCount,
-      confidence: evidence.confidence,
-      status: evidence.completions >= 3 && evidence.confidence >= 60 ? "working" : evidence.completions >= 1 ? "testing" : "uncertain",
-    })),
+    protocol: evidenceRows.map(({ evidence, skill }) => {
+      const context = contextBySkill.get(skill.id) ?? { contextCount: 0, delayedFollowups: 0, delayedGoalSum: 0, delayedHelpfulSum: 0, delayedAvoidanceCount: 0 };
+      const immediateQuality = evidence.completions ? ((evidence.helpfulSum + evidence.goalSum) / evidence.completions / 20) * 28 : 0;
+      const evidenceStrength = Math.min(32, evidence.completions * 10);
+      const contextStrength = Math.min(15, context.contextCount * 5);
+      const delayedQuality = context.delayedFollowups ? ((context.delayedGoalSum + context.delayedHelpfulSum) / context.delayedFollowups / 20) * 25 : 0;
+      const avoidancePenalty = evidence.completions ? (evidence.avoidanceCount / evidence.completions) * 15 : 0;
+      const delayedPenalty = context.delayedFollowups ? (context.delayedAvoidanceCount / context.delayedFollowups) * 20 : 0;
+      let confidence = Math.round(evidenceStrength + immediateQuality + contextStrength + delayedQuality - avoidancePenalty - delayedPenalty);
+      if (!context.delayedFollowups) confidence = Math.min(59, confidence);
+      confidence = Math.max(0, Math.min(100, confidence));
+      return {
+        skillId: skill.id,
+        title: skill.title,
+        track: skill.track,
+        attempts: evidence.attempts,
+        completions: evidence.completions,
+        helpfulness: evidence.completions ? Math.round((evidence.helpfulSum / evidence.completions) * 10) / 10 : null,
+        goalProgress: evidence.completions ? Math.round((evidence.goalSum / evidence.completions) * 10) / 10 : null,
+        relief: evidence.completions ? Math.round((evidence.reliefSum / evidence.completions) * 10) / 10 : null,
+        avoidanceCount: evidence.avoidanceCount,
+        confidence,
+        delayedFollowups: context.delayedFollowups,
+        contextCount: context.contextCount,
+        status: evidence.completions >= 3 && context.delayedFollowups >= 1 && confidence >= 60 ? "working" : evidence.completions >= 1 ? "testing" : "uncertain",
+      };
+    }).sort((a, b) => b.confidence - a.confidence),
+    onboarding: onboardingRow ? {
+      focus: onboardingRow.focus,
+      goal: onboardingRow.goal,
+      practiceStyle: onboardingRow.practiceStyle,
+      supportMode: onboardingRow.supportMode,
+      safetyAcknowledged: onboardingRow.safetyAcknowledged,
+    } : null,
+    suggestedSkillId: focusSkill[onboardingRow?.focus ?? ""] ?? "micro-start",
+    pendingCheckIn: pendingRow ? {
+      attemptId: pendingRow.attemptId,
+      skillTitle: pendingRow.skillTitle,
+      completedAt: pendingRow.completedAt,
+      immediateGoalProgress: pendingRow.immediate?.goalProgress ?? 0,
+    } : null,
+    history: history.slice(0, 20),
     stats: { attempts, completions, completionRate: attempts ? Math.round((completions / attempts) * 100) : 0 },
     access: accessRow ?? { sharingEnabled: false, shareProtocol: true, shareAttempts: true, shareNotes: false },
   };
@@ -359,6 +505,52 @@ export async function completeAttempt(user: ChatGPTUser, input: { attemptId: str
       },
     }),
   ]);
+  return loadDashboard(user);
+}
+
+export async function completeDelayedCheckIn(user: ChatGPTUser, input: { attemptId: string; goalProgress: number; helpfulness: number; avoidance: boolean; note?: string }) {
+  const db = getDb();
+  const attempt = await db
+    .select()
+    .from(skillAttempts)
+    .where(and(eq(skillAttempts.id, input.attemptId), eq(skillAttempts.userId, user.userId), eq(skillAttempts.status, "completed")))
+    .get();
+  if (!attempt) throw new Error("Завершённая практика не найдена");
+
+  await db.insert(delayedOutcomes).values({
+    id: crypto.randomUUID(),
+    attemptId: attempt.id,
+    userId: user.userId,
+    goalProgress: Math.max(0, Math.min(10, input.goalProgress)),
+    helpfulness: Math.max(0, Math.min(10, input.helpfulness)),
+    avoidance: input.avoidance,
+    note: (input.note ?? "").slice(0, 800),
+  }).onConflictDoNothing();
+  return loadDashboard(user);
+}
+
+export async function completeOnboarding(user: ChatGPTUser, input: OnboardingProfile) {
+  const focuses = new Set(["start", "emotions", "relationships", "impulses", "loneliness"]);
+  const practiceStyles = new Set(["short", "guided", "mixed"]);
+  const supportModes = new Set(["solo", "own_psychologist", "specialist_later"]);
+  if (!focuses.has(input.focus)) throw new Error("Выберите основную трудность");
+  if (input.goal.trim().length < 5) throw new Error("Опишите желаемое изменение чуть конкретнее");
+  if (!practiceStyles.has(input.practiceStyle) || !supportModes.has(input.supportMode)) throw new Error("Проверьте ответы онбординга");
+  if (!input.safetyAcknowledged) throw new Error("Подтвердите границы самостоятельной практики");
+
+  await ensureUser(user);
+  const profile = {
+    userId: user.userId,
+    focus: input.focus,
+    goal: input.goal.trim().slice(0, 500),
+    practiceStyle: input.practiceStyle,
+    supportMode: input.supportMode,
+    safetyAcknowledged: true,
+  };
+  await getDb().insert(onboardingProfiles).values(profile).onConflictDoUpdate({
+    target: onboardingProfiles.userId,
+    set: { ...profile, updatedAt: sql`CURRENT_TIMESTAMP` },
+  });
   return loadDashboard(user);
 }
 

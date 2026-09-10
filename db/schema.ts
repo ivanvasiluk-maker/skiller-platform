@@ -11,6 +11,17 @@ export const users = sqliteTable("users", {
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
+export const onboardingProfiles = sqliteTable("onboarding_profiles", {
+  userId: text("user_id").primaryKey().references(() => users.id),
+  focus: text("focus").notNull(),
+  goal: text("goal").notNull(),
+  practiceStyle: text("practice_style").notNull(),
+  supportMode: text("support_mode").notNull(),
+  safetyAcknowledged: integer("safety_acknowledged", { mode: "boolean" }).notNull().default(false),
+  completedAt: text("completed_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
+
 export const skills = sqliteTable("skills", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
@@ -76,6 +87,24 @@ export const outcomes = sqliteTable(
   (table) => [
     uniqueIndex("idx_outcomes_attempt_unique").on(table.attemptId),
     index("idx_outcomes_user_created").on(table.userId, table.createdAt),
+  ],
+);
+
+export const delayedOutcomes = sqliteTable(
+  "delayed_outcomes",
+  {
+    id: text("id").primaryKey(),
+    attemptId: text("attempt_id").notNull().references(() => skillAttempts.id),
+    userId: text("user_id").notNull().references(() => users.id),
+    goalProgress: integer("goal_progress").notNull(),
+    helpfulness: integer("helpfulness").notNull(),
+    avoidance: integer("avoidance", { mode: "boolean" }).notNull().default(false),
+    note: text("note").notNull().default(""),
+    createdAt: timestamp(),
+  },
+  (table) => [
+    uniqueIndex("idx_delayed_outcomes_attempt_unique").on(table.attemptId),
+    index("idx_delayed_outcomes_user_created").on(table.userId, table.createdAt),
   ],
 );
 

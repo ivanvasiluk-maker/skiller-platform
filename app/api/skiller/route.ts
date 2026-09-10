@@ -1,5 +1,5 @@
 import { getChatGPTUser } from "@/app/chatgpt-auth";
-import { completeAttempt, recommendSkill, startAttempt, updateAccess } from "@/lib/skiller-data";
+import { completeAttempt, completeDelayedCheckIn, completeOnboarding, recommendSkill, startAttempt, updateAccess } from "@/lib/skiller-data";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +36,24 @@ export async function POST(request: Request) {
         helpfulness: Number(body.helpfulness ?? 0),
         avoidance: Boolean(body.avoidance),
         note: String(body.note ?? ""),
+      }));
+    }
+    if (body.action === "delayedComplete") {
+      return Response.json(await completeDelayedCheckIn(user, {
+        attemptId: String(body.attemptId ?? ""),
+        goalProgress: Number(body.goalProgress ?? 0),
+        helpfulness: Number(body.helpfulness ?? 0),
+        avoidance: Boolean(body.avoidance),
+        note: String(body.note ?? ""),
+      }));
+    }
+    if (body.action === "onboarding") {
+      return Response.json(await completeOnboarding(user, {
+        focus: String(body.focus ?? ""),
+        goal: String(body.goal ?? ""),
+        practiceStyle: String(body.practiceStyle ?? "short"),
+        supportMode: String(body.supportMode ?? "solo"),
+        safetyAcknowledged: Boolean(body.safetyAcknowledged),
       }));
     }
     if (body.action === "access") {
