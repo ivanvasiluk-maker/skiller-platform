@@ -1,5 +1,5 @@
 import { and, desc, eq, sql } from "drizzle-orm";
-import { getDb } from "@/db";
+import { getDb, getRawDb } from "@/db";
 import {
   delayedOutcomes,
   onboardingProfiles,
@@ -12,6 +12,7 @@ import {
   users,
 } from "@/db/schema";
 import type { ChatGPTUser } from "@/app/chatgpt-auth";
+import { analyzeSituation, type SituationAnalysis, type SituationChain } from "@/lib/situation-analysis";
 
 export type SkillStep = { title: string; copy: string };
 export type SkillView = {
@@ -23,6 +24,15 @@ export type SkillView = {
   why: string;
   durationSeconds: number;
   steps: SkillStep[];
+};
+
+export type RecommendationResult = {
+  situationId: string;
+  safetyStatus: "self-guided" | "escalate";
+  skill: SkillView | null;
+  changePoint?: string;
+  reason?: string;
+  analysis?: SituationAnalysis | null;
 };
 
 export type ProtocolItem = {
@@ -55,9 +65,23 @@ export type HistoryItem = {
   track: string;
   situationKind: string | null;
   mode: string;
+  completed: boolean;
   completedAt: string;
   immediate: { reliefDelta: number; goalProgress: number; helpfulness: number; avoidance: boolean; note: string } | null;
   delayed: { goalProgress: number; helpfulness: number; avoidance: boolean; note: string; createdAt: string } | null;
+};
+
+export type SituationItem = {
+  id: string;
+  kind: string;
+  description: string;
+  confirmedText: string;
+  changePoint: string;
+  recommendationReason: string;
+  safetyStatus: string;
+  chain: SituationChain | null;
+  createdAt: string;
+  attempts: number;
 };
 
 export type PendingCheckIn = {
@@ -75,9 +99,7 @@ export type DashboardData = {
   suggestedSkillId: string;
   pendingCheckIn: PendingCheckIn | null;
   history: HistoryItem[];
-  suggestedSkillId: string;
-  pendingCheckIn: PendingCheckIn | null;
-  history: HistoryItem[];
+  recentSituations: SituationItem[];
   stats: { attempts: number; completions: number; completionRate: number };
   access: { sharingEnabled: boolean; shareProtocol: boolean; shareAttempts: boolean; shareNotes: boolean };
 };
@@ -198,6 +220,7 @@ const seedSkills = [
 ] as const;
 
 export async function ensureUser(user: ChatGPTUser) {
+  await ensureStorage();
   const db = getDb();
   await db
     .insert(users)
@@ -209,8 +232,54 @@ export async function ensureUser(user: ChatGPTUser) {
 }
 
 export async function ensureSkillCatalog() {
+  await ensureStorage();
   const db = getDb();
   await db.insert(skills).values(seedSkills.map((skill) => ({ ...skill }))).onConflictDoNothing();
+}
+
+let storageReady: Promise<void> | null = null;
+
+async function ensureStorage() {
+  storageReady ??= createStorage();
+  return storageReady;
+}
+
+async function createStorage() {
+  const db = getRawDb();
+  await db.batch([
+    db.prepare("CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text NOT NULL, display_name text NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS skills (id text PRIMARY KEY NOT NULL, title text NOT NULL, approach text NOT NULL, track text NOT NULL, description text NOT NULL, why text NOT NULL, steps_json text NOT NULL, duration_seconds integer NOT NULL, autonomous integer DEFAULT true NOT NULL, active integer DEFAULT true NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS situations (id text PRIMARY KEY NOT NULL, user_id text NOT NULL, kind text NOT NULL, description text DEFAULT '' NOT NULL, first_signal text DEFAULT 'emotion' NOT NULL, action_urge text DEFAULT 'pause' NOT NULL, desired_direction text DEFAULT 'stabilize' NOT NULL, important_goal text DEFAULT '' NOT NULL, change_point text DEFAULT 'before_action' NOT NULL, recommendation_reason text DEFAULT '' NOT NULL, confirmed_text text DEFAULT '' NOT NULL, chain_json text DEFAULT '' NOT NULL, ai_analysis_json text DEFAULT '' NOT NULL, intensity integer NOT NULL, safety_status text NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS skill_attempts (id text PRIMARY KEY NOT NULL, user_id text NOT NULL, situation_id text, skill_id text NOT NULL, mode text NOT NULL, status text DEFAULT 'started' NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, completed_at text)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS outcomes (id text PRIMARY KEY NOT NULL, attempt_id text NOT NULL, user_id text NOT NULL, completed integer DEFAULT true NOT NULL, relief_delta integer NOT NULL, goal_progress integer NOT NULL, helpfulness integer NOT NULL, avoidance integer DEFAULT false NOT NULL, note text DEFAULT '' NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS delayed_outcomes (id text PRIMARY KEY NOT NULL, attempt_id text NOT NULL, user_id text NOT NULL, goal_progress integer NOT NULL, helpfulness integer NOT NULL, avoidance integer DEFAULT false NOT NULL, note text DEFAULT '' NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS personal_skill_evidence (id integer PRIMARY KEY AUTOINCREMENT NOT NULL, user_id text NOT NULL, skill_id text NOT NULL, attempts integer DEFAULT 0 NOT NULL, completions integer DEFAULT 0 NOT NULL, helpful_sum integer DEFAULT 0 NOT NULL, goal_sum integer DEFAULT 0 NOT NULL, relief_sum integer DEFAULT 0 NOT NULL, avoidance_count integer DEFAULT 0 NOT NULL, confidence integer DEFAULT 0 NOT NULL, last_used_at text)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS psychologist_access (user_id text PRIMARY KEY NOT NULL, sharing_enabled integer DEFAULT false NOT NULL, share_protocol integer DEFAULT true NOT NULL, share_attempts integer DEFAULT true NOT NULL, share_notes integer DEFAULT false NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS onboarding_profiles (user_id text PRIMARY KEY NOT NULL, focus text NOT NULL, goal text NOT NULL, practice_style text NOT NULL, support_mode text NOT NULL, safety_acknowledged integer DEFAULT false NOT NULL, completed_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
+  ]);
+  for (const statement of [
+    "ALTER TABLE situations ADD confirmed_text text DEFAULT '' NOT NULL",
+    "ALTER TABLE situations ADD chain_json text DEFAULT '' NOT NULL",
+    "ALTER TABLE situations ADD ai_analysis_json text DEFAULT '' NOT NULL",
+    "ALTER TABLE skill_attempts ADD created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL",
+    "ALTER TABLE outcomes ADD completed integer DEFAULT true NOT NULL",
+  ]) {
+    try {
+      await db.prepare(statement).run();
+    } catch {
+      // Existing local and hosted databases may already have these columns.
+    }
+  }
+  await db.batch([
+    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_outcomes_attempt_unique ON outcomes (attempt_id)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_outcomes_user_created ON outcomes (user_id, created_at)"),
+    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_delayed_outcomes_attempt_unique ON delayed_outcomes (attempt_id)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_delayed_outcomes_user_created ON delayed_outcomes (user_id, created_at)"),
+    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_user_skill_unique ON personal_skill_evidence (user_id, skill_id)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_evidence_user_confidence ON personal_skill_evidence (user_id, confidence)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_situations_user_created ON situations (user_id, created_at)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_attempts_user_started ON skill_attempts (user_id, created_at)"),
+  ]);
 }
 
 function toSkillView(row: typeof skills.$inferSelect): SkillView {
@@ -221,7 +290,7 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
   await ensureUser(user);
   await ensureSkillCatalog();
   const db = getDb();
-  const [skillRows, evidenceRows, attemptStats, accessRow, onboardingRow, historyRows, evidenceContextRows] = await Promise.all([
+  const [skillRows, evidenceRows, attemptStats, accessRow, onboardingRow, historyRows, evidenceContextRows, situationRows] = await Promise.all([
     db.select().from(skills).where(eq(skills.active, true)),
     db
       .select({ evidence: personalSkillEvidence, skill: skills })
@@ -246,6 +315,7 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
         track: skills.track,
         situationKind: situations.kind,
         mode: skillAttempts.mode,
+        completed: outcomes.completed,
         completedAt: skillAttempts.completedAt,
         reliefDelta: outcomes.reliefDelta,
         immediateGoalProgress: outcomes.goalProgress,
@@ -263,7 +333,7 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
       .leftJoin(situations, eq(skillAttempts.situationId, situations.id))
       .leftJoin(outcomes, eq(skillAttempts.id, outcomes.attemptId))
       .leftJoin(delayedOutcomes, eq(skillAttempts.id, delayedOutcomes.attemptId))
-      .where(and(eq(skillAttempts.userId, user.userId), eq(skillAttempts.status, "completed")))
+      .where(and(eq(skillAttempts.userId, user.userId), sql`${skillAttempts.status} in ('completed', 'attempted')`))
       .orderBy(desc(skillAttempts.completedAt))
       .limit(40),
     db
@@ -280,6 +350,25 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
       .leftJoin(delayedOutcomes, eq(skillAttempts.id, delayedOutcomes.attemptId))
       .where(and(eq(skillAttempts.userId, user.userId), eq(skillAttempts.status, "completed")))
       .groupBy(skillAttempts.skillId),
+    db
+      .select({
+        id: situations.id,
+        kind: situations.kind,
+        description: situations.description,
+        confirmedText: situations.confirmedText,
+        changePoint: situations.changePoint,
+        recommendationReason: situations.recommendationReason,
+        safetyStatus: situations.safetyStatus,
+        chainJson: situations.chainJson,
+        createdAt: situations.createdAt,
+        attempts: sql<number>`count(${skillAttempts.id})`,
+      })
+      .from(situations)
+      .leftJoin(skillAttempts, eq(situations.id, skillAttempts.situationId))
+      .where(eq(situations.userId, user.userId))
+      .groupBy(situations.id)
+      .orderBy(desc(situations.createdAt))
+      .limit(12),
   ]);
 
   const attempts = Number(attemptStats[0]?.attempts ?? 0);
@@ -297,6 +386,7 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
     track: row.track,
     situationKind: row.situationKind,
     mode: row.mode,
+    completed: Boolean(row.completed),
     completedAt: row.completedAt!,
     immediate: row.immediateGoalProgress === null ? null : {
       reliefDelta: Number(row.reliefDelta ?? 0),
@@ -313,7 +403,7 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
       createdAt: row.delayedCreatedAt ?? row.completedAt!,
     },
   }));
-  const pendingRow = history.find((item) => !item.delayed && Date.now() - Date.parse(item.completedAt) >= 6 * 60 * 60 * 1000);
+  const pendingRow = history.find((item) => item.completed && !item.delayed && Date.now() - Date.parse(item.completedAt) >= 6 * 60 * 60 * 1000);
   const focusSkill: Record<string, string> = {
     start: "micro-start",
     emotions: "check-facts",
@@ -326,29 +416,30 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
     skills: skillRows.map(toSkillView),
     protocol: evidenceRows.map(({ evidence, skill }) => {
       const context = contextBySkill.get(skill.id) ?? { contextCount: 0, delayedFollowups: 0, delayedGoalSum: 0, delayedHelpfulSum: 0, delayedAvoidanceCount: 0 };
-      const immediateQuality = evidence.completions ? ((evidence.helpfulSum + evidence.goalSum) / evidence.completions / 20) * 28 : 0;
+      const immediateQuality = evidence.attempts ? ((evidence.helpfulSum + evidence.goalSum) / evidence.attempts / 20) * 28 : 0;
       const evidenceStrength = Math.min(32, evidence.completions * 10);
       const contextStrength = Math.min(15, context.contextCount * 5);
       const delayedQuality = context.delayedFollowups ? ((context.delayedGoalSum + context.delayedHelpfulSum) / context.delayedFollowups / 20) * 25 : 0;
-      const avoidancePenalty = evidence.completions ? (evidence.avoidanceCount / evidence.completions) * 15 : 0;
+      const avoidancePenalty = evidence.attempts ? (evidence.avoidanceCount / evidence.attempts) * 15 : 0;
       const delayedPenalty = context.delayedFollowups ? (context.delayedAvoidanceCount / context.delayedFollowups) * 20 : 0;
       let confidence = Math.round(evidenceStrength + immediateQuality + contextStrength + delayedQuality - avoidancePenalty - delayedPenalty);
       if (!context.delayedFollowups) confidence = Math.min(59, confidence);
       confidence = Math.max(0, Math.min(100, confidence));
+      const status: ProtocolItem["status"] = evidence.completions >= 3 && context.delayedFollowups >= 1 && confidence >= 60 ? "working" : evidence.completions >= 1 ? "testing" : "uncertain";
       return {
         skillId: skill.id,
         title: skill.title,
         track: skill.track,
         attempts: evidence.attempts,
         completions: evidence.completions,
-        helpfulness: evidence.completions ? Math.round((evidence.helpfulSum / evidence.completions) * 10) / 10 : null,
-        goalProgress: evidence.completions ? Math.round((evidence.goalSum / evidence.completions) * 10) / 10 : null,
-        relief: evidence.completions ? Math.round((evidence.reliefSum / evidence.completions) * 10) / 10 : null,
+        helpfulness: evidence.attempts ? Math.round((evidence.helpfulSum / evidence.attempts) * 10) / 10 : null,
+        goalProgress: evidence.attempts ? Math.round((evidence.goalSum / evidence.attempts) * 10) / 10 : null,
+        relief: evidence.attempts ? Math.round((evidence.reliefSum / evidence.attempts) * 10) / 10 : null,
         avoidanceCount: evidence.avoidanceCount,
         confidence,
         delayedFollowups: context.delayedFollowups,
         contextCount: context.contextCount,
-        status: evidence.completions >= 3 && context.delayedFollowups >= 1 && confidence >= 60 ? "working" : evidence.completions >= 1 ? "testing" : "uncertain",
+        status,
       };
     }).sort((a, b) => b.confidence - a.confidence),
     onboarding: onboardingRow ? {
@@ -366,6 +457,18 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
       immediateGoalProgress: pendingRow.immediate?.goalProgress ?? 0,
     } : null,
     history: history.slice(0, 20),
+    recentSituations: situationRows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      description: row.description,
+      confirmedText: row.confirmedText,
+      changePoint: row.changePoint,
+      recommendationReason: row.recommendationReason,
+      safetyStatus: row.safetyStatus,
+      chain: parseChain(row.chainJson),
+      createdAt: row.createdAt,
+      attempts: Number(row.attempts ?? 0),
+    })),
     stats: { attempts, completions, completionRate: attempts ? Math.round((completions / attempts) * 100) : 0 },
     access: accessRow ?? { sharingEnabled: false, shareProtocol: true, shareAttempts: true, shareNotes: false },
   };
@@ -407,7 +510,7 @@ function selectSkill(input: RecommendationInput) {
   return { skillId: "grounding-543", changePoint: "возвращение внимания", reason: "Сначала восстанавливаем контакт с настоящим, затем выбираем действие по цели." };
 }
 
-export async function recommendSkill(user: ChatGPTUser, input: RecommendationInput) {
+export async function recommendSkill(user: ChatGPTUser, input: RecommendationInput): Promise<RecommendationResult> {
   await ensureUser(user);
   await ensureSkillCatalog();
   const db = getDb();
@@ -421,20 +524,62 @@ export async function recommendSkill(user: ChatGPTUser, input: RecommendationInp
     userId: user.userId,
     kind: input.kind,
     description: input.description.slice(0, 1200),
+    confirmedText: input.description.slice(0, 4000),
     firstSignal: input.firstSignal,
     actionUrge: input.actionUrge,
     desiredDirection: input.desiredDirection,
     importantGoal: input.importantGoal.slice(0, 500),
     changePoint: selection.changePoint,
     recommendationReason: selection.reason,
+    chainJson: "",
+    aiAnalysisJson: "",
     intensity: Math.max(1, Math.min(10, input.intensity)),
     safetyStatus: unsafe ? "escalate" : "self-guided",
   });
-  if (unsafe) return { situationId, safetyStatus: "escalate" as const, skill: null };
+  if (unsafe) return { situationId, safetyStatus: "escalate" as const, skill: null, analysis: null };
 
   const skill = await db.select().from(skills).where(and(eq(skills.id, selection.skillId), eq(skills.active, true))).get();
   if (!skill) throw new Error("Skill catalog is unavailable");
-  return { situationId, safetyStatus: "self-guided" as const, skill: toSkillView(skill), changePoint: selection.changePoint, reason: selection.reason };
+  const analysis = await analyzeSituation({
+    kind: input.kind,
+    description: input.description.slice(0, 1200),
+    firstSignal: input.firstSignal,
+    actionUrge: input.actionUrge,
+    desiredDirection: input.desiredDirection,
+    importantGoal: input.importantGoal.slice(0, 500),
+    intensity: Math.max(1, Math.min(10, input.intensity)),
+  });
+  if (analysis) {
+    await db.update(situations).set({
+      chainJson: JSON.stringify(analysis.chain),
+      aiAnalysisJson: JSON.stringify(analysis),
+    }).where(and(eq(situations.id, situationId), eq(situations.userId, user.userId)));
+  }
+  return { situationId, safetyStatus: "self-guided" as const, skill: toSkillView(skill), changePoint: selection.changePoint, reason: selection.reason, analysis };
+}
+
+export async function confirmSituationChain(user: ChatGPTUser, input: { situationId: string; confirmedText: string; chain: SituationChain }) {
+  await getDb().update(situations).set({
+    confirmedText: input.confirmedText.trim().slice(0, 4000),
+    chainJson: JSON.stringify(normalizeChain(input.chain)),
+  }).where(and(eq(situations.id, input.situationId), eq(situations.userId, user.userId)));
+  return { ok: true };
+}
+
+export async function deleteSituation(user: ChatGPTUser, situationId: string) {
+  const db = getDb();
+  const attempts = await db
+    .select({ id: skillAttempts.id })
+    .from(skillAttempts)
+    .where(and(eq(skillAttempts.userId, user.userId), eq(skillAttempts.situationId, situationId)));
+
+  for (const attempt of attempts) {
+    await db.delete(delayedOutcomes).where(and(eq(delayedOutcomes.userId, user.userId), eq(delayedOutcomes.attemptId, attempt.id)));
+    await db.delete(outcomes).where(and(eq(outcomes.userId, user.userId), eq(outcomes.attemptId, attempt.id)));
+  }
+  await db.delete(skillAttempts).where(and(eq(skillAttempts.userId, user.userId), eq(skillAttempts.situationId, situationId)));
+  await db.delete(situations).where(and(eq(situations.id, situationId), eq(situations.userId, user.userId)));
+  return loadDashboard(user);
 }
 
 export async function startAttempt(user: ChatGPTUser, input: { skillId: string; situationId?: string; mode: string }) {
@@ -451,7 +596,7 @@ export async function startAttempt(user: ChatGPTUser, input: { skillId: string; 
   return { attemptId: id };
 }
 
-export async function completeAttempt(user: ChatGPTUser, input: { attemptId: string; reliefDelta: number; goalProgress: number; helpfulness: number; avoidance: boolean; note?: string }) {
+export async function completeAttempt(user: ChatGPTUser, input: { attemptId: string; completed: boolean; reliefDelta: number; goalProgress: number; helpfulness: number; avoidance: boolean; note?: string }) {
   const db = getDb();
   const attempt = await db
     .select()
@@ -466,14 +611,16 @@ export async function completeAttempt(user: ChatGPTUser, input: { attemptId: str
   const goal = Math.max(0, Math.min(10, input.goalProgress));
   const helpful = Math.max(0, Math.min(10, input.helpfulness));
   const avoidanceAdd = input.avoidance ? 1 : 0;
+  const completionAdd = input.completed ? 1 : 0;
   const confidenceAdd = Math.max(6, Math.round((helpful + goal) / 2));
 
   await db.batch([
-    db.update(skillAttempts).set({ status: "completed", completedAt }).where(eq(skillAttempts.id, attempt.id)),
+    db.update(skillAttempts).set({ status: input.completed ? "completed" : "attempted", completedAt }).where(eq(skillAttempts.id, attempt.id)),
     db.insert(outcomes).values({
       id: crypto.randomUUID(),
       attemptId: attempt.id,
       userId: user.userId,
+      completed: input.completed,
       reliefDelta: relief,
       goalProgress: goal,
       helpfulness: helpful,
@@ -484,7 +631,7 @@ export async function completeAttempt(user: ChatGPTUser, input: { attemptId: str
       userId: user.userId,
       skillId: attempt.skillId,
       attempts: 1,
-      completions: 1,
+      completions: completionAdd,
       helpfulSum: helpful,
       goalSum: goal,
       reliefSum: relief,
@@ -495,7 +642,7 @@ export async function completeAttempt(user: ChatGPTUser, input: { attemptId: str
       target: [personalSkillEvidence.userId, personalSkillEvidence.skillId],
       set: {
         attempts: sql`${personalSkillEvidence.attempts} + 1`,
-        completions: sql`${personalSkillEvidence.completions} + 1`,
+        completions: sql`${personalSkillEvidence.completions} + ${completionAdd}`,
         helpfulSum: sql`${personalSkillEvidence.helpfulSum} + ${helpful}`,
         goalSum: sql`${personalSkillEvidence.goalSum} + ${goal}`,
         reliefSum: sql`${personalSkillEvidence.reliefSum} + ${relief}`,
@@ -562,4 +709,37 @@ export async function updateAccess(user: ChatGPTUser, input: { sharingEnabled: b
     set: { ...input, updatedAt: sql`CURRENT_TIMESTAMP` },
   });
   return input;
+}
+
+function parseChain(value: string): SituationChain | null {
+  if (!value) return null;
+  try {
+    return normalizeChain(JSON.parse(value) as SituationChain);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeChain(value: SituationChain): SituationChain {
+  return {
+    context: cleanChainValue(value.context),
+    vulnerability: cleanChainValue(value.vulnerability),
+    trigger: cleanChainValue(value.trigger),
+    thoughts: cleanChainValue(value.thoughts),
+    emotions: cleanChainValue(value.emotions),
+    body: cleanChainValue(value.body),
+    urges: cleanChainValue(value.urges),
+    actions: cleanChainValue(value.actions),
+    targetBehavior: cleanChainValue(value.targetBehavior),
+    immediateConsequences: cleanChainValue(value.immediateConsequences),
+    laterConsequences: cleanChainValue(value.laterConsequences),
+    skillPoint: cleanChainValue(value.skillPoint),
+    userWords: cleanChainValue(value.userWords),
+    aiHypotheses: cleanChainValue(value.aiHypotheses),
+  };
+}
+
+function cleanChainValue(value: unknown) {
+  const text = typeof value === "string" ? value.trim() : "";
+  return (text || "неизвестно").slice(0, 700);
 }
