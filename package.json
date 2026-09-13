@@ -12,8 +12,12 @@
     "start": "node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js dev --config dist/server/wrangler.json --local --persist-to .wrangler/state --ip 127.0.0.1 --inspector-port 0",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/run-python-tests.mjs",
-    "verify": "npm run lint && npm run typecheck && npm test && npm run build",
+    "test": "npm run test:core",
+    "test:core": "node scripts/run-python-tests.mjs",
+    "test:d1": "node scripts/test-d1.mjs",
+    "test:d1:seed": "node scripts/d1-test-admin.mjs seed",
+    "test:d1:reset": "node scripts/d1-test-admin.mjs reset",
+    "verify": "npm run lint && npm run typecheck && npm run test:core && npm run test:d1 && npm run build",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
