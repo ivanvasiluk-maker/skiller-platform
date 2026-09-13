@@ -13,7 +13,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/run-python-tests.mjs",
-    "verify": "npm run lint && npm run typecheck && npm run build && npm test",
+    "verify": "npm run lint && npm run typecheck && npm test && npm run build",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
