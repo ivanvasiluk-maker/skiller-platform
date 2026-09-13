@@ -34,6 +34,9 @@ SKILLER не является экстренной службой, не став
 - Sites authentication headers;
 - Shadcn/Radix UI.
 
+Проверка изолированной тестовой D1 и локальные guarded seed/reset описаны в
+[`docs/TEST_D1.md`](docs/TEST_D1.md).
+
 ## Локальная разработка
 
 ```bash
