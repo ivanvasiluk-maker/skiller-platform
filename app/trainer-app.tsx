@@ -17,19 +17,19 @@ const trainerIntroductions: Record<TrainerId, { label: string; quote: string; me
   marsha: {
     label: "Бережная опора",
     quote: "Похоже, сейчас и так много давления. Давай не требовать от себя всего сразу и найдём один шаг, который по силам.",
-    method: "Сначала помогает вернуть опору, затем мягко переводит к действию.",
+    method: "DBT/CFT: сначала помогает вернуть опору, затем мягко переводит к действию.",
     fit: "Когда важно, чтобы рядом было тепло, спокойно и без стыда.",
   },
   beck: {
     label: "Спокойный анализ",
     quote: "Отделим то, что произошло, от того, что ты об этом подумал. Какой маленький эксперимент может проверить эту мысль?",
-    method: "Разбирает факты и гипотезы, предлагает проверяемый эксперимент.",
+    method: "CBT и функциональный анализ: разбирает факты и гипотезы, предлагает проверяемый эксперимент.",
     fit: "Когда хочется понять закономерность и принимать решения яснее.",
   },
   skinny: {
     label: "Импульс к действию",
     quote: "Всю задачу сегодня не тащим. Что можно сделать за две минуты, чтобы после тебя остался видимый след?",
-    method: "Убирает лишний разгон и превращает намерение в конкретный микро-старт.",
+    method: "Поведенческая активация и ADHD-навыки: превращает намерение в конкретный микро-старт.",
     fit: "Когда всё понятно, но сложно начать или не отвлечься.",
   },
 };
@@ -40,6 +40,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   const [settings, setSettings] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [name, setName] = useState("");
   const [trainerId, setTrainerId] = useState<TrainerId>("marsha");
   const [step, setStep] = useState(0);
@@ -103,13 +104,18 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
     setScreen("trainers");
   }
   async function saveTrainer() {
+    const selectedName = trainers[trainerId].name;
     const result = await command({ action: "settings", trainerId });
-    if (result) setScreen("home");
+    if (result) {
+      setNotice(`Теперь с тобой ${selectedName}. Текущая задача, память и прогресс сохранены.`);
+      setScreen("home");
+    }
   }
 
   return <div className="trainer-shell" style={{ "--trainer-color": trainer.color, "--trainer-bg": trainer.background } as React.CSSProperties}>
     <header className="trainer-header"><Link className="trainer-logo" href="/">skiller<span>●</span></Link><span className="trainer-header-note">маленькие действия · реальные изменения</span>{profile && <button className="trainer-icon-button" aria-label="Настройки тренера" onClick={() => setSettings(!settings)}><Settings2 size={21}/></button>}</header>
     {error && <div className="trainer-error" role="alert">{error}<button onClick={refresh}>Обновить данные</button></div>}
+    {notice && <div className="trainer-notice" role="status">{notice}<button aria-label="Закрыть уведомление" onClick={() => setNotice("")}><X size={16}/></button></div>}
     {!profile ? <main className="trainer-onboarding">
       <span className="trainer-kicker">ЗНАКОМСТВО / {step + 1} ИЗ 3</span>
       {step === 0 && <><h1>Начнём с тебя.</h1><p className="trainer-lead">Не нужно менять всё сразу.<br/>Найдём один шаг, который сейчас по силам.</p><label className="trainer-label" htmlFor="your-name">Как к тебе обращаться?</label><input id="your-name" className="trainer-input" autoComplete="given-name" maxLength={60} value={name} onChange={e => setName(e.target.value)} placeholder="Твоё имя"/><button className="trainer-primary" disabled={!name.trim()} onClick={() => setStep(1)}>Познакомиться с тренерами <ArrowUpRight size={18}/></button><p className="trainer-caption">SKILLER — AI-тренировка навыков, не психотерапия и не экстренная помощь.</p></>}
