@@ -28,6 +28,7 @@ test("continuity is empty without saved plans", () => {
     lastOutcome: null,
     openLoop: null,
     day2CheckIn: null,
+    days4to6: null,
     nextCheckAt: null,
   });
 });
@@ -129,4 +130,96 @@ test("Day 2 keeps the Day 1 action after a newer Day 2 plan exists", () => {
   assert.equal(result.day2CheckIn?.planId, "day-1-plan");
   assert.equal(result.day2CheckIn?.skillTitle, "Первый шаг");
   assert.match(result.day2CheckIn?.prompt ?? "", /сделал больше/);
+});
+
+test("Days 4–6 repeat a helpful completion only after a new context check", () => {
+  const result = buildTrainerContinuity([
+    plan({ result: "done", helpfulness: 8, attempt_id: "attempt-1" }),
+  ], {
+    day: 4,
+    startedAt,
+    safetyAllowsPractice: true,
+  });
+  assert.equal(result.days4to6?.kind, "repeat");
+  assert.equal(result.days4to6?.reasonCode, "repeat_helpful");
+  assert.match(result.days4to6?.prompt ?? "", /получилось, полезность — 8\/10/);
+  assert.match(result.days4to6?.prompt ?? "", /безопасность и совместимость/);
+});
+
+test("Days 4–6 resize a failed action without low-fit evidence", () => {
+  const result = buildTrainerContinuity([
+    plan({ result: "failed", helpfulness: 5, attempt_id: "attempt-1" }),
+  ], {
+    day: 5,
+    startedAt,
+    safetyAllowsPractice: true,
+  });
+  assert.equal(result.days4to6?.kind, "resize");
+  assert.equal(result.days4to6?.reasonCode, "resize_after_failed");
+});
+
+test("Days 4–6 replace low-fit evidence instead of repeating it", () => {
+  const result = buildTrainerContinuity([
+    plan({ result: "done", helpfulness: 2, attempt_id: "attempt-1" }),
+  ], {
+    day: 6,
+    startedAt,
+    safetyAllowsPractice: true,
+  });
+  assert.equal(result.days4to6?.kind, "replace");
+  assert.equal(result.days4to6?.reasonCode, "replace_low_fit");
+  assert.match(result.days4to6?.prompt ?? "", /Автоматически повторять.*не будем/);
+});
+
+test("Days 4–6 do not automatically repeat neutral evidence", () => {
+  const result = buildTrainerContinuity([
+    plan({ result: "done", helpfulness: 5, attempt_id: "attempt-1" }),
+  ], {
+    day: 4,
+    startedAt,
+    safetyAllowsPractice: true,
+  });
+  assert.equal(result.days4to6?.kind, "new");
+  assert.equal(result.days4to6?.reasonCode, "first_try");
+  assert.match(result.days4to6?.prompt ?? "", /недостаточно для автоматического повтора/);
+});
+
+test("an unresolved latest action keeps the open loop instead of a Days 4–6 card", () => {
+  const result = buildTrainerContinuity([
+    plan({ attempt_id: "attempt-2" }),
+    plan({
+      id: "older-success",
+      result: "done",
+      helpfulness: 8,
+      attempt_id: "attempt-1",
+    }),
+  ], {
+    day: 4,
+    startedAt,
+    safetyAllowsPractice: true,
+  });
+  assert.equal(result.days4to6, null);
+  assert.equal(result.openLoop?.kind, "started");
+});
+
+test("safety blocks the Days 4–6 return card", () => {
+  const result = buildTrainerContinuity([
+    plan({ result: "done", helpfulness: 8, attempt_id: "attempt-1" }),
+  ], {
+    day: 4,
+    startedAt,
+    safetyAllowsPractice: false,
+  });
+  assert.equal(result.days4to6, null);
+});
+
+test("the Days 4–6 card is not reused on Day 7", () => {
+  const result = buildTrainerContinuity([
+    plan({ result: "done", helpfulness: 8, attempt_id: "attempt-1" }),
+  ], {
+    day: 7,
+    startedAt,
+    safetyAllowsPractice: true,
+  });
+  assert.equal(result.days4to6, null);
 });
