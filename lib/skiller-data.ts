@@ -13,6 +13,12 @@ import {
 } from "@/db/schema";
 import type { ChatGPTUser } from "@/app/chatgpt-auth";
 import { analyzeSituation, type SituationAnalysis, type SituationChain } from "@/lib/situation-analysis";
+import {
+  decideNextStep,
+  OUTCOME_POLICY_VERSION,
+  OUTCOME_REASON_CODES,
+  type OutcomeReasonCode,
+} from "@/lib/outcome-policy";
 
 export type SkillStep = { title: string; copy: string };
 export type SkillView = {
@@ -32,6 +38,8 @@ export type RecommendationResult = {
   skill: SkillView | null;
   changePoint?: string;
   reason?: string;
+  reasonCode?: OutcomeReasonCode | "safety_blocked";
+  decisionVersion?: string;
   analysis?: SituationAnalysis | null;
 };
 
@@ -78,6 +86,8 @@ export type SituationItem = {
   confirmedText: string;
   changePoint: string;
   recommendationReason: string;
+  decisionReasonCode: string;
+  decisionVersion: string;
   safetyStatus: string;
   chain: SituationChain | null;
   createdAt: string;
@@ -249,7 +259,7 @@ async function createStorage() {
   await db.batch([
     db.prepare("CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text NOT NULL, display_name text NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS skills (id text PRIMARY KEY NOT NULL, title text NOT NULL, approach text NOT NULL, track text NOT NULL, description text NOT NULL, why text NOT NULL, steps_json text NOT NULL, duration_seconds integer NOT NULL, autonomous integer DEFAULT true NOT NULL, active integer DEFAULT true NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS situations (id text PRIMARY KEY NOT NULL, user_id text NOT NULL, kind text NOT NULL, description text DEFAULT '' NOT NULL, first_signal text DEFAULT 'emotion' NOT NULL, action_urge text DEFAULT 'pause' NOT NULL, desired_direction text DEFAULT 'stabilize' NOT NULL, important_goal text DEFAULT '' NOT NULL, change_point text DEFAULT 'before_action' NOT NULL, recommendation_reason text DEFAULT '' NOT NULL, confirmed_text text DEFAULT '' NOT NULL, chain_json text DEFAULT '' NOT NULL, ai_analysis_json text DEFAULT '' NOT NULL, intensity integer NOT NULL, safety_status text NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS situations (id text PRIMARY KEY NOT NULL, user_id text NOT NULL, kind text NOT NULL, description text DEFAULT '' NOT NULL, first_signal text DEFAULT 'emotion' NOT NULL, action_urge text DEFAULT 'pause' NOT NULL, desired_direction text DEFAULT 'stabilize' NOT NULL, important_goal text DEFAULT '' NOT NULL, change_point text DEFAULT 'before_action' NOT NULL, recommendation_reason text DEFAULT '' NOT NULL, decision_reason_code text DEFAULT 'first_try' NOT NULL, decision_version text DEFAULT 'outcome-policy-v1' NOT NULL, confirmed_text text DEFAULT '' NOT NULL, chain_json text DEFAULT '' NOT NULL, ai_analysis_json text DEFAULT '' NOT NULL, intensity integer NOT NULL, safety_status text NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS skill_attempts (id text PRIMARY KEY NOT NULL, user_id text NOT NULL, situation_id text, skill_id text NOT NULL, mode text NOT NULL, status text DEFAULT 'started' NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, completed_at text)"),
     db.prepare("CREATE TABLE IF NOT EXISTS outcomes (id text PRIMARY KEY NOT NULL, attempt_id text NOT NULL, user_id text NOT NULL, completed integer DEFAULT true NOT NULL, relief_delta integer NOT NULL, goal_progress integer NOT NULL, helpfulness integer NOT NULL, avoidance integer DEFAULT false NOT NULL, note text DEFAULT '' NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS delayed_outcomes (id text PRIMARY KEY NOT NULL, attempt_id text NOT NULL, user_id text NOT NULL, goal_progress integer NOT NULL, helpfulness integer NOT NULL, avoidance integer DEFAULT false NOT NULL, note text DEFAULT '' NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
@@ -261,6 +271,8 @@ async function createStorage() {
     "ALTER TABLE situations ADD confirmed_text text DEFAULT '' NOT NULL",
     "ALTER TABLE situations ADD chain_json text DEFAULT '' NOT NULL",
     "ALTER TABLE situations ADD ai_analysis_json text DEFAULT '' NOT NULL",
+    "ALTER TABLE situations ADD decision_reason_code text DEFAULT 'first_try' NOT NULL",
+    "ALTER TABLE situations ADD decision_version text DEFAULT 'outcome-policy-v1' NOT NULL",
     "ALTER TABLE skill_attempts ADD created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL",
     "ALTER TABLE outcomes ADD completed integer DEFAULT true NOT NULL",
   ]) {
@@ -358,6 +370,8 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
         confirmedText: situations.confirmedText,
         changePoint: situations.changePoint,
         recommendationReason: situations.recommendationReason,
+        decisionReasonCode: situations.decisionReasonCode,
+        decisionVersion: situations.decisionVersion,
         safetyStatus: situations.safetyStatus,
         chainJson: situations.chainJson,
         createdAt: situations.createdAt,
@@ -464,6 +478,8 @@ export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {
       confirmedText: row.confirmedText,
       changePoint: row.changePoint,
       recommendationReason: row.recommendationReason,
+      decisionReasonCode: row.decisionReasonCode,
+      decisionVersion: row.decisionVersion,
       safetyStatus: row.safetyStatus,
       chain: parseChain(row.chainJson),
       createdAt: row.createdAt,
@@ -510,15 +526,89 @@ function selectSkill(input: RecommendationInput) {
   return { skillId: "grounding-543", changePoint: "возвращение внимания", reason: "Сначала восстанавливаем контакт с настоящим, затем выбираем действие по цели." };
 }
 
+const alternativeSkillIds: Record<string, string> = {
+  "micro-start": "distract-delay",
+  "distract-delay": "micro-start",
+  stop: "grounding-543",
+  "grounding-543": "stop",
+  "validate-first": "dear-man",
+  "dear-man": "validate-first",
+  "check-facts": "grounding-543",
+  "urge-surfing": "stop",
+};
+
+async function latestCompatibleOutcome(userId: string, kind: string, skillId: string) {
+  return getDb()
+    .select({
+      completed: outcomes.completed,
+      helpfulness: outcomes.helpfulness,
+      avoidance: outcomes.avoidance,
+    })
+    .from(outcomes)
+    .innerJoin(skillAttempts, eq(outcomes.attemptId, skillAttempts.id))
+    .innerJoin(situations, eq(skillAttempts.situationId, situations.id))
+    .where(and(
+      eq(outcomes.userId, userId),
+      eq(skillAttempts.skillId, skillId),
+      eq(situations.kind, kind),
+    ))
+    .orderBy(desc(outcomes.createdAt))
+    .limit(1)
+    .get();
+}
+
+function decisionReason(
+  reasonCode: OutcomeReasonCode | "safety_blocked",
+  baseReason: string,
+  hadEvidence: boolean,
+) {
+  if (reasonCode === "safety_blocked") {
+    return "При возможном риске автоматический подбор навыков прекращается.";
+  }
+  if (reasonCode === OUTCOME_REASON_CODES.repeatHelpful) {
+    return "В похожей ситуации этот навык уже помог и получил оценку не ниже 6 из 10. Проверим, работает ли он повторно.";
+  }
+  if (reasonCode === OUTCOME_REASON_CODES.resizeAfterFailed) {
+    return "В прошлый раз полный шаг не получился. Оставим только первый короткий элемент и проверим его отдельно.";
+  }
+  if (reasonCode === OUTCOME_REASON_CODES.replaceLowFit) {
+    return "Предыдущий навык оказался малополезным или усилил избегание, поэтому автоматически повторять его не будем.";
+  }
+  return hadEvidence
+    ? "Предыдущего результата пока недостаточно для персонального повторения. Используем базовый безопасный выбор для этой ситуации."
+    : baseReason;
+}
+
 export async function recommendSkill(user: ChatGPTUser, input: RecommendationInput): Promise<RecommendationResult> {
   await ensureUser(user);
   await ensureSkillCatalog();
   const db = getDb();
   const situationId = crypto.randomUUID();
   const unsafe = input.risk !== "no";
-  const selection = unsafe
+  const baseSelection = unsafe
     ? { skillId: "", changePoint: "проверка безопасности", reason: "При возможном риске автоматический подбор навыков прекращается." }
     : selectSkill(input);
+  const prior = unsafe
+    ? null
+    : await latestCompatibleOutcome(user.userId, input.kind, baseSelection.skillId);
+  const policyDecision = decideNextStep({
+    safetyAllowsPractice: !unsafe,
+    hasCompatibleEvidence: Boolean(prior),
+    completed: prior?.completed ?? null,
+    helpfulness: prior?.helpfulness ?? null,
+    avoidanceIncreased: prior?.avoidance ?? false,
+  });
+  const reasonCode: OutcomeReasonCode | "safety_blocked" =
+    policyDecision ?? "safety_blocked";
+  const selectedSkillId =
+    reasonCode === OUTCOME_REASON_CODES.replaceLowFit
+      ? alternativeSkillIds[baseSelection.skillId] ?? baseSelection.skillId
+      : baseSelection.skillId;
+  const selection = {
+    ...baseSelection,
+    skillId: selectedSkillId,
+    reason: decisionReason(reasonCode, baseSelection.reason, Boolean(prior)),
+  };
   await db.insert(situations).values({
     id: situationId,
     userId: user.userId,
@@ -531,15 +621,33 @@ export async function recommendSkill(user: ChatGPTUser, input: RecommendationInp
     importantGoal: input.importantGoal.slice(0, 500),
     changePoint: selection.changePoint,
     recommendationReason: selection.reason,
+    decisionReasonCode: reasonCode,
+    decisionVersion: OUTCOME_POLICY_VERSION,
     chainJson: "",
     aiAnalysisJson: "",
     intensity: Math.max(1, Math.min(10, input.intensity)),
     safetyStatus: unsafe ? "escalate" : "self-guided",
   });
-  if (unsafe) return { situationId, safetyStatus: "escalate" as const, skill: null, analysis: null };
+  if (unsafe) return {
+    situationId,
+    safetyStatus: "escalate" as const,
+    skill: null,
+    reasonCode,
+    decisionVersion: OUTCOME_POLICY_VERSION,
+    analysis: null,
+  };
 
   const skill = await db.select().from(skills).where(and(eq(skills.id, selection.skillId), eq(skills.active, true))).get();
   if (!skill) throw new Error("Skill catalog is unavailable");
+  let skillView = toSkillView(skill);
+  if (reasonCode === OUTCOME_REASON_CODES.resizeAfterFailed) {
+    skillView = {
+      ...skillView,
+      durationSeconds: Math.min(60, skillView.durationSeconds),
+      description: "Только первый шаг. После него можно остановиться и оценить результат.",
+      steps: skillView.steps.slice(0, 1),
+    };
+  }
   const analysis = await analyzeSituation({
     kind: input.kind,
     description: input.description.slice(0, 1200),
@@ -555,7 +663,16 @@ export async function recommendSkill(user: ChatGPTUser, input: RecommendationInp
       aiAnalysisJson: JSON.stringify(analysis),
     }).where(and(eq(situations.id, situationId), eq(situations.userId, user.userId)));
   }
-  return { situationId, safetyStatus: "self-guided" as const, skill: toSkillView(skill), changePoint: selection.changePoint, reason: selection.reason, analysis };
+  return {
+    situationId,
+    safetyStatus: "self-guided" as const,
+    skill: skillView,
+    changePoint: selection.changePoint,
+    reason: selection.reason,
+    reasonCode,
+    decisionVersion: OUTCOME_POLICY_VERSION,
+    analysis,
+  };
 }
 
 export async function confirmSituationChain(user: ChatGPTUser, input: { situationId: string; confirmedText: string; chain: SituationChain }) {

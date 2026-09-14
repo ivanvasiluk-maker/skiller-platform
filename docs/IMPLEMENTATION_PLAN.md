@@ -97,10 +97,10 @@
 ### Задачи
 
 - [x] Выделить чистую outcome-policy функцию без запросов к БД (Round 1.1; подключение ranking к D1 — Round 1.2).
-- [ ] Перед подбором читать evidence, последний outcome и совместимые контексты.
+- [x] Перед подбором читать последний outcome для совместимого контекста и текущего eligible-навыка.
 - [ ] Добавить reason codes: `repeat_helpful`, `transfer`, `resize_after_failed`, `replace_low_fit`, `first_try`.
-- [ ] Сохранять reason code и version решения в plan/event.
-- [ ] Не учитывать abandoned attempt как completion.
+- [x] Сохранять reason code и version решения в situation/plan/event.
+- [x] Не учитывать abandoned attempt как completion.
 - [ ] Сделать повторный outcome идемпотентным.
 - [ ] Добавить интеграционные тесты successful repeat, failed replacement, low helpfulness, avoidance и safety override.
 

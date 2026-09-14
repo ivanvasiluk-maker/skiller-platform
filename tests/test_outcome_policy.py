@@ -1,4 +1,6 @@
+import json
 import unittest
+from pathlib import Path
 
 from skiller.learning import (
     OutcomePolicyInput,
@@ -20,6 +22,16 @@ def facts(**overrides: object) -> OutcomePolicyInput:
 
 
 class OutcomePolicyTests(unittest.TestCase):
+    def test_shared_policy_fixtures(self) -> None:
+        fixture_path = Path(__file__).parent / "fixtures" / "outcome-policy.json"
+        fixtures = json.loads(fixture_path.read_text(encoding="utf-8"))
+
+        for fixture in fixtures:
+            with self.subTest(fixture["name"]):
+                decision = decide_next_step(OutcomePolicyInput(**fixture["facts"]))
+                actual = decision.value if decision is not None else None
+                self.assertEqual(actual, fixture["expected"])
+
     def test_safety_blocks_every_outcome_aware_decision(self) -> None:
         decision = decide_next_step(
             facts(

@@ -83,13 +83,22 @@ try {
   const missing = requiredTables.filter((name) => !tables.has(name));
   if (missing.length) throw new Error(`Missing migrated tables: ${missing.join(", ")}`);
 
+  const situationColumns = new Set(
+    query("PRAGMA table_info(situations);").map((row) => row.name),
+  );
+  const missingDecisionColumns = ["decision_reason_code", "decision_version"]
+    .filter((name) => !situationColumns.has(name));
+  if (missingDecisionColumns.length) {
+    throw new Error(`Missing decision columns: ${missingDecisionColumns.join(", ")}`);
+  }
+
   query("INSERT INTO users (id,email,display_name) VALUES ('d1-smoke-user','smoke@example.invalid','D1 Smoke');");
   const userRows = query("SELECT id,display_name FROM users WHERE id='d1-smoke-user';");
   if (userRows.length !== 1 || userRows[0].display_name !== "D1 Smoke") {
     throw new Error("D1 smoke record could not be read back.");
   }
 
-  console.log(`D1 smoke passed: ${requiredTables.length} tables migrated; isolated write/read succeeded; non-test guard rejected.`);
+  console.log(`D1 smoke passed: ${requiredTables.length} tables migrated; decision audit columns present; isolated write/read succeeded; non-test guard rejected.`);
 } finally {
   rmSync(persistPath, { recursive: true, force: true });
 }
