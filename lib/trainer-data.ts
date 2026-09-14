@@ -63,6 +63,7 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
     continuity: buildTrainerContinuity(plans.results, {
       day,
       startedAt: profile.created_at,
+      safetyAllowsPractice: !profile.safety_flag,
     }),
   };
 }

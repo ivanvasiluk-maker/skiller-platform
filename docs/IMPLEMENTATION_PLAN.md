@@ -122,6 +122,8 @@
 - [x] Day 2: коротко напомнить действие Day 1 и спросить фактический результат (Round 2.2).
 - [x] Day 3: recap из attempts/outcomes/events с маркировкой неизвестного (Round 2.3).
 - [ ] Days 4–6: выбирать repeat, transfer, resize или replacement по evidence.
+  - [x] Карточка возврата repeat/resize/replacement использует outcome-policy и требует новый контекст (Round 2.4a).
+  - [ ] Transfer между контекстами: отдельный reason code и доказуемая совместимость (Round 2.4b).
 - [ ] Day 7: недельный recap, рабочая гипотеза, ограничения уверенности и следующий эксперимент.
 - [ ] Возврат после пропуска: без стыда и потери прогресса.
 - [ ] Смена trainer/mode: сохранять plans, outcomes, events и day state.
