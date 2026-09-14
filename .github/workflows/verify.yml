@@ -46,5 +46,8 @@ jobs:
       - name: Run isolated D1 smoke test
         run: npm run test:d1
 
+      - name: Run D1 recommendation integration tests
+        run: npm run test:integration
+
       - name: Build production bundle
         run: npm run build

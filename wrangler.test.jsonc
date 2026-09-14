@@ -1,8 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "skiller-d1-smoke-test",
-  "main": "scripts/d1-smoke-worker.mjs",
-  "compatibility_date": "2026-09-01",
+  "main": "scripts/d1-integration-worker.ts",
+  "compatibility_date": "2026-05-22",
   "d1_databases": [
     {
       "binding": "DB",

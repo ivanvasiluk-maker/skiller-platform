@@ -14,11 +14,11 @@ import {
 import type { ChatGPTUser } from "@/app/chatgpt-auth";
 import { analyzeSituation, type SituationAnalysis, type SituationChain } from "@/lib/situation-analysis";
 import {
-  decideNextStep,
   OUTCOME_POLICY_VERSION,
   OUTCOME_REASON_CODES,
   type OutcomeReasonCode,
 } from "@/lib/outcome-policy";
+import { decideRecommendationFromD1 } from "@/lib/outcome-history";
 
 export type SkillStep = { title: string; copy: string };
 export type SkillView = {
@@ -537,26 +537,6 @@ const alternativeSkillIds: Record<string, string> = {
   "urge-surfing": "stop",
 };
 
-async function latestCompatibleOutcome(userId: string, kind: string, skillId: string) {
-  return getDb()
-    .select({
-      completed: outcomes.completed,
-      helpfulness: outcomes.helpfulness,
-      avoidance: outcomes.avoidance,
-    })
-    .from(outcomes)
-    .innerJoin(skillAttempts, eq(outcomes.attemptId, skillAttempts.id))
-    .innerJoin(situations, eq(skillAttempts.situationId, situations.id))
-    .where(and(
-      eq(outcomes.userId, userId),
-      eq(skillAttempts.skillId, skillId),
-      eq(situations.kind, kind),
-    ))
-    .orderBy(desc(outcomes.createdAt))
-    .limit(1)
-    .get();
-}
-
 function decisionReason(
   reasonCode: OutcomeReasonCode | "safety_blocked",
   baseReason: string,
@@ -588,16 +568,15 @@ export async function recommendSkill(user: ChatGPTUser, input: RecommendationInp
   const baseSelection = unsafe
     ? { skillId: "", changePoint: "проверка безопасности", reason: "При возможном риске автоматический подбор навыков прекращается." }
     : selectSkill(input);
-  const prior = unsafe
-    ? null
-    : await latestCompatibleOutcome(user.userId, input.kind, baseSelection.skillId);
-  const policyDecision = decideNextStep({
+  const decision = await decideRecommendationFromD1({
+    db: getRawDb(),
+    userId: user.userId,
+    kind: input.kind,
+    skillId: baseSelection.skillId,
     safetyAllowsPractice: !unsafe,
-    hasCompatibleEvidence: Boolean(prior),
-    completed: prior?.completed ?? null,
-    helpfulness: prior?.helpfulness ?? null,
-    avoidanceIncreased: prior?.avoidance ?? false,
   });
+  const prior = decision.prior;
+  const policyDecision = decision.reasonCode;
   const reasonCode: OutcomeReasonCode | "safety_blocked" =
     policyDecision ?? "safety_blocked";
   const selectedSkillId =
