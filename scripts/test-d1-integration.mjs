@@ -145,6 +145,8 @@ try {
     prior: null,
     reasonCode: "first_try",
     decisionVersion: "outcome-policy-v1",
+    selectedSkillId: "micro-start",
+    shouldResize: false,
   });
 
   const repeatHelpful = await runScenario(baseUrl, "repeat_helpful");
@@ -152,10 +154,30 @@ try {
     prior: { completed: true, helpfulness: 7, avoidance: false },
     reasonCode: "repeat_helpful",
     decisionVersion: "outcome-policy-v1",
+    selectedSkillId: "micro-start",
+    shouldResize: false,
+  });
+
+  const resizeAfterFailed = await runScenario(baseUrl, "resize_after_failed");
+  assert.deepEqual(resizeAfterFailed, {
+    prior: { completed: false, helpfulness: 5, avoidance: false },
+    reasonCode: "resize_after_failed",
+    decisionVersion: "outcome-policy-v1",
+    selectedSkillId: "micro-start",
+    shouldResize: true,
+  });
+
+  const replaceLowFit = await runScenario(baseUrl, "replace_low_fit");
+  assert.deepEqual(replaceLowFit, {
+    prior: { completed: true, helpfulness: 2, avoidance: false },
+    reasonCode: "replace_low_fit",
+    decisionVersion: "outcome-policy-v1",
+    selectedSkillId: "distract-delay",
+    shouldResize: false,
   });
 
   console.log(
-    "D1 recommendation integration passed: first_try and repeat_helpful use migrated history and production policy code.",
+    "D1 recommendation integration passed: first_try, repeat_helpful, resize_after_failed, and replace_low_fit use migrated history and production decision code.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");

@@ -4,13 +4,20 @@ import {
 } from "../lib/outcome-history";
 
 type Env = { DB: D1Database };
-type Scenario = "first_try" | "repeat_helpful";
+const scenarios = [
+  "first_try",
+  "repeat_helpful",
+  "resize_after_failed",
+  "replace_low_fit",
+] as const;
+type Scenario = (typeof scenarios)[number];
 
-async function seedHelpfulOutcome(
+async function seedOutcome(
   db: D1Database,
   userId: string,
   skillId: string,
   kind: string,
+  outcome: { completed: boolean; helpfulness: number; avoidance: boolean },
 ) {
   const situationId = crypto.randomUUID();
   const attemptId = crypto.randomUUID();
@@ -20,10 +27,26 @@ async function seedHelpfulOutcome(
     ).bind(situationId, userId, kind, 4, "self-guided"),
     db.prepare(
       "INSERT INTO skill_attempts (id,user_id,situation_id,skill_id,mode,status) VALUES (?,?,?,?,?,?)",
-    ).bind(attemptId, userId, situationId, skillId, "guided", "completed"),
+    ).bind(
+      attemptId,
+      userId,
+      situationId,
+      skillId,
+      "guided",
+      outcome.completed ? "completed" : "attempted",
+    ),
     db.prepare(
       "INSERT INTO outcomes (id,attempt_id,user_id,completed,relief_delta,goal_progress,helpfulness,avoidance) VALUES (?,?,?,?,?,?,?,?)",
-    ).bind(crypto.randomUUID(), attemptId, userId, 1, 1, 7, 7, 0),
+    ).bind(
+      crypto.randomUUID(),
+      attemptId,
+      userId,
+      outcome.completed ? 1 : 0,
+      1,
+      7,
+      outcome.helpfulness,
+      outcome.avoidance ? 1 : 0,
+    ),
   ]);
 }
 
@@ -54,7 +77,23 @@ async function runScenario(
   ]);
 
   if (scenario === "repeat_helpful") {
-    await seedHelpfulOutcome(db, userId, skillId, kind);
+    await seedOutcome(db, userId, skillId, kind, {
+      completed: true,
+      helpfulness: 7,
+      avoidance: false,
+    });
+  } else if (scenario === "resize_after_failed") {
+    await seedOutcome(db, userId, skillId, kind, {
+      completed: false,
+      helpfulness: 5,
+      avoidance: false,
+    });
+  } else if (scenario === "replace_low_fit") {
+    await seedOutcome(db, userId, skillId, kind, {
+      completed: true,
+      helpfulness: 2,
+      avoidance: false,
+    });
   }
 
   return decideRecommendationFromD1({
@@ -78,11 +117,11 @@ const worker: ExportedHandler<Env> = {
     }
 
     const body = await request.json<{ scenario?: string }>();
-    if (body.scenario !== "first_try" && body.scenario !== "repeat_helpful") {
+    if (!scenarios.includes(body.scenario as Scenario)) {
       return Response.json({ error: "Unknown scenario" }, { status: 400 });
     }
 
-    return Response.json(await runScenario(env.DB, body.scenario));
+    return Response.json(await runScenario(env.DB, body.scenario as Scenario));
   },
 };
 
