@@ -4,12 +4,13 @@ import { getRawDb } from "@/db";
 import type { ChatGPTUser } from "@/app/chatgpt-auth";
 import { ensureUser, recommendSkill, startAttempt, completeAttempt, completeOnboarding, loadDashboard, type SkillView } from "@/lib/skiller-data";
 import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-idempotency";
+import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-continuity";
 import { trainers, interactionModes, PRODUCT_VERSION, CHARACTER_VERSION, dayIndex, requiresSafetyRoute, safetyMessage, buildRecap, type TrainerId, type InteractionMode } from "@/lib/trainers";
 
 export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
 export type TrainerMessage = { id: string; role: "user" | "assistant"; text: string; trainer_id: TrainerId; created_at: string };
 export type TrainerPlan = { id: string; situation_id: string; skill_json: string; skill_title: string; entry_mode: string; intensity_before: number; intensity_after: number | null; attempt_id: string | null; result: "done" | "failed" | "more" | null; helpfulness: number | null; decision_reason_code: string; decision_version: string; created_at: string };
-export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[] };
+export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity };
 
 const statements = [
   "CREATE TABLE IF NOT EXISTS trainer_profiles (user_id TEXT PRIMARY KEY, pseudonym TEXT NOT NULL UNIQUE, name TEXT NOT NULL, trainer_id TEXT NOT NULL, interaction_mode TEXT NOT NULL DEFAULT 'explore', main_problem TEXT NOT NULL, consent_version TEXT NOT NULL, created_at TEXT NOT NULL, last_interaction_at TEXT NOT NULL, safety_flag INTEGER NOT NULL DEFAULT 0)",
@@ -44,13 +45,13 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
   await ensureTrainerStorage();
   const db = getRawDb();
   const profile = await profileFor(user.userId);
-  if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [] };
+  if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [], continuity: buildTrainerContinuity([]) };
   const [messages, plans, days] = await Promise.all([
     db.prepare("SELECT * FROM (SELECT id,role,text,trainer_id,created_at FROM trainer_messages WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 60) ORDER BY created_at,id").bind(user.userId).all<TrainerMessage>(),
     db.prepare("SELECT * FROM trainer_plans WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100").bind(user.userId).all<TrainerPlan>(),
     db.prepare("SELECT DISTINCT day_index FROM pilot_events WHERE user_id=? AND event_name='engaged_return' ORDER BY day_index").bind(profile.pseudonym).all<{ day_index: number }>(),
   ]);
-  return { profile, day: dayIndex(profile.created_at), messages: messages.results, plans: plans.results, recap: buildRecap(plans.results), engagedDays: days.results.map(d => d.day_index) };
+  return { profile, day: dayIndex(profile.created_at), messages: messages.results, plans: plans.results, recap: buildRecap(plans.results), engagedDays: days.results.map(d => d.day_index), continuity: buildTrainerContinuity(plans.results) };
 }
 async function event(profile: TrainerProfile, session: string, name: string, key: string, payload: Record<string, string | number | boolean | null> = {}) {
   await getRawDb().prepare("INSERT OR IGNORE INTO pilot_events (id,user_id,session_id,trainer_id,day_index,event_name,payload_json,product_version,created_at) VALUES (?,?,?,?,?,?,?,?,?)")

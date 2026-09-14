@@ -118,14 +118,14 @@
 
 ### Задачи
 
-- [ ] Определить day state: `day_index`, `last_action`, `last_outcome`, `open_loop`, `next_check_at`.
+- [x] Определить day state: `day_index`, `last_action`, `last_outcome`, `open_loop`, `next_check_at` (Round 2.1).
 - [ ] Day 2: коротко напомнить действие Day 1 и спросить фактический результат.
 - [ ] Day 3: recap из attempts/outcomes/events с маркировкой неизвестного.
 - [ ] Days 4–6: выбирать repeat, transfer, resize или replacement по evidence.
 - [ ] Day 7: недельный recap, рабочая гипотеза, ограничения уверенности и следующий эксперимент.
 - [ ] Возврат после пропуска: без стыда и потери прогресса.
 - [ ] Смена trainer/mode: сохранять plans, outcomes, events и day state.
-- [ ] Добавить overdue/open-loop карточку на главный экран.
+- [x] Добавить overdue/open-loop карточку на главный экран (Round 2.1).
 
 ### Приемка
 
