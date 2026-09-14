@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getRawDb } from "@/db";
 import type { ChatGPTUser } from "@/app/chatgpt-auth";
 import { ensureUser, recommendSkill, startAttempt, completeAttempt, completeOnboarding, loadDashboard, type SkillView } from "@/lib/skiller-data";
+import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-idempotency";
 import { trainers, interactionModes, PRODUCT_VERSION, CHARACTER_VERSION, dayIndex, requiresSafetyRoute, safetyMessage, buildRecap, type TrainerId, type InteractionMode } from "@/lib/trainers";
 
 export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
@@ -83,11 +84,9 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
   await ensureUser(user);
   await ensureTrainerStorage();
   const db = getRawDb();
-  const cached = await db.prepare("SELECT response_json FROM trainer_requests WHERE user_id=? AND request_id=?").bind(user.userId, body.requestId).first<{ response_json: string | null }>();
-  if (cached?.response_json) return JSON.parse(cached.response_json);
-  // Serialize a logical request. A duplicate in-flight request never repeats a mutation.
-  const claim = await db.prepare("INSERT OR IGNORE INTO trainer_requests (user_id,request_id,created_at) VALUES (?,?,?)").bind(user.userId, body.requestId, new Date().toISOString()).run();
-  if (!claim.meta.changes) throw new Error("Запрос ещё выполняется. Обновите данные через несколько секунд.");
+  const claim = await claimIdempotentRequest<TrainerState>(db, user.userId, body.requestId);
+  if (claim.state === "cached") return claim.response;
+  if (claim.state === "in_flight") throw new Error("Запрос ещё выполняется. Обновите данные через несколько секунд.");
   try {
     let profile = await profileFor(user.userId);
     if (body.action === "onboard") {
@@ -210,7 +209,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
       await event(profile, body.sessionId, "feedback_submitted", key, { helpfulness: body.helpfulness, understood: body.understood, continue_intent: body.continueIntent });
     }
     const state = await trainerState(user);
-    await db.prepare("UPDATE trainer_requests SET response_json=? WHERE user_id=? AND request_id=?").bind(JSON.stringify(state), user.userId, key).run();
+    await cacheIdempotentResponse(db, user.userId, key, state);
     return state;
   } catch (error) {
     // Keep the claim: partial mutations must never be replayed blindly.
