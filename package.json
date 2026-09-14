@@ -13,7 +13,7 @@
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next",
     "typecheck": "tsc --noEmit",
     "test": "npm run test:core",
-    "test:core": "node scripts/run-python-tests.mjs && node --experimental-strip-types --test tests/outcome-policy.test.ts tests/trainer-continuity.test.ts",
+    "test:core": "node scripts/run-python-tests.mjs && node --experimental-strip-types --test tests/outcome-policy.test.ts tests/trainer-continuity.test.ts tests/trainer-recap.test.ts",
     "test:d1": "node scripts/test-d1.mjs",
     "test:integration": "node scripts/test-d1-integration.mjs",
     "test:d1:seed": "node scripts/d1-test-admin.mjs seed",

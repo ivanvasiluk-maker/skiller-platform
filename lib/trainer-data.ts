@@ -52,13 +52,14 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
     db.prepare("SELECT DISTINCT day_index FROM pilot_events WHERE user_id=? AND event_name='engaged_return' ORDER BY day_index").bind(profile.pseudonym).all<{ day_index: number }>(),
   ]);
   const day = dayIndex(profile.created_at);
+  const engagedDays = days.results.map((entry) => entry.day_index);
   return {
     profile,
     day,
     messages: messages.results,
     plans: plans.results,
-    recap: buildRecap(plans.results),
-    engagedDays: days.results.map(d => d.day_index),
+    recap: buildRecap(plans.results, engagedDays),
+    engagedDays,
     continuity: buildTrainerContinuity(plans.results, {
       day,
       startedAt: profile.created_at,

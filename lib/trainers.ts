@@ -51,17 +51,104 @@ export function requiresSafetyRoute(text: string, risk: string = "no") {
 
 export const safetyMessage = "Сейчас важнее живая помощь. Если есть непосредственная опасность, свяжись с местной экстренной службой или попроси человека рядом помочь это сделать. По возможности побудь рядом с человеком, которому доверяешь, и отойди от того, чем можно причинить вред. SKILLER не является экстренной службой. Автоматическую практику сейчас остановим.";
 
-export type RecapAttempt = { result: string | null; helpfulness: number | null; skill_title: string; created_at: string };
-export function buildRecap(attempts: RecapAttempt[]) {
-  const finished = attempts.filter(a => a.result === "done" || a.result === "more");
-  const helpful = finished.filter(a => (a.helpfulness ?? 0) >= 6);
-  const repeated = [...new Set(helpful.map(a => a.skill_title))].filter(title => helpful.filter(a => a.skill_title === title).length >= 2);
+export type RecapAttempt = {
+  attempt_id: string | null;
+  result: ActionResult | null;
+  helpfulness: number | null;
+  skill_title: string;
+  created_at: string;
+};
+
+function unique(values: string[]) {
+  return [...new Set(values)];
+}
+
+function recapResult(result: ActionResult) {
+  if (result === "done") return "получилось";
+  if (result === "more") return "сделано больше запланированного";
+  return "не получилось";
+}
+
+export function buildRecap(
+  plans: RecapAttempt[],
+  eventDays: number[] = [],
+) {
+  const attempted = plans.filter(
+    (plan) => Boolean(plan.attempt_id) || plan.result !== null,
+  );
+  const outcomes = plans.filter((plan) => plan.result !== null);
+  const successful = outcomes.filter(
+    (plan) => plan.result === "done" || plan.result === "more",
+  );
+  const helpful = successful.filter((plan) => (plan.helpfulness ?? 0) >= 6);
+  const difficult = outcomes.filter(
+    (plan) =>
+      plan.result === "failed" ||
+      (plan.helpfulness !== null && plan.helpfulness < 4),
+  );
+  const helpfulSkills = unique(helpful.map((plan) => plan.skill_title));
+  const repeated = helpfulSkills.filter(
+    (title) =>
+      helpful.filter((plan) => plan.skill_title === title).length >= 2,
+  );
+  const unresolved = plans.filter((plan) => plan.result === null);
+  const missingHelpfulness = outcomes.filter(
+    (plan) => plan.helpfulness === null,
+  );
+
+  const facts = plans.map((plan) => {
+    if (plan.result === null) {
+      return plan.attempt_id
+        ? `«${plan.skill_title}»: попытка начата; итог не отмечен.`
+        : `«${plan.skill_title}»: действие предложено; неизвестно, была ли попытка.`;
+    }
+    const helpfulness =
+      plan.helpfulness === null
+        ? "полезность не оценена"
+        : `полезность ${plan.helpfulness}/10`;
+    return `«${plan.skill_title}»: ${recapResult(plan.result)}; ${helpfulness}.`;
+  });
+
+  const unknown = unique([
+    ...unresolved.map(
+      (plan) => `Для «${plan.skill_title}» результат пока неизвестен.`,
+    ),
+    ...missingHelpfulness.map(
+      (plan) => `Для «${plan.skill_title}» полезность не оценена.`,
+    ),
+  ]);
+
+  let next =
+    "Сначала выберем одно небольшое действие и сохраним наблюдаемый результат.";
+  if (repeated.length) {
+    next =
+      "Полезность этого навыка отмечена повторно. Следующим отдельным шагом можно проверить его в другом контексте; причина улучшения пока не доказана.";
+  } else if (helpful.length) {
+    next =
+      "Есть одна полезная попытка. Можно повторить тот же посильный шаг в похожей ситуации; одного результата недостаточно для общего вывода.";
+  } else if (difficult.length) {
+    next =
+      "Сохранён неудачный или низко оценённый результат. Следующим шагом можно уменьшить действие или выбрать другой навык.";
+  } else if (unresolved.length) {
+    next =
+      "Сначала отметим фактический итог незакрытого действия. Без результата вывод делать рано.";
+  } else if (outcomes.length) {
+    next =
+      "Результат сохранён, но данных о выраженной полезности пока недостаточно. Уточним оценку перед следующим выводом.";
+  }
+
   return {
-    attempts: attempts.length, completed: finished.length,
-    skills: [...new Set(attempts.map(a => a.skill_title))],
-    helpful: [...new Set(helpful.map(a => a.skill_title))],
-    difficult: [...new Set(attempts.filter(a => a.result === "failed" || (a.helpfulness !== null && a.helpfulness < 4)).map(a => a.skill_title))],
+    proposed: plans.length,
+    attempts: attempted.length,
+    outcomesRecorded: outcomes.length,
+    completed: successful.length,
+    engagedDays: [...new Set(eventDays)].sort((a, b) => a - b),
+    skills: unique(plans.map((plan) => plan.skill_title)),
+    facts,
+    helpful: helpfulSkills,
+    difficult: unique(difficult.map((plan) => plan.skill_title)),
     repeated,
-    next: repeated.length ? "Проверим один из повторно полезных навыков в другом контексте. Причина улучшения пока не доказана." : helpful.length ? "Повторим посильный шаг в похожей ситуации. Одного удачного опыта недостаточно для вывода." : "Проверим более маленький шаг и посмотрим, что мешает. Пока данных для вывода недостаточно.",
+    unknown,
+    next,
   };
 }
