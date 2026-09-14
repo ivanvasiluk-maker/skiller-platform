@@ -69,14 +69,130 @@ function recapResult(result: ActionResult) {
   return "не получилось";
 }
 
+function recapTimestamp(value: string) {
+  const normalized = value.includes("T")
+    ? value
+    : `${value.replace(" ", "T")}Z`;
+  const parsed = Date.parse(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function firstWeekPlans(plans: RecapAttempt[], startedAt?: string) {
+  if (!startedAt) return plans;
+  const start = recapTimestamp(startedAt);
+  if (start === null) return plans;
+  const dayEightStarts = start + 7 * 86_400_000;
+  return plans.filter((plan) => {
+    const created = recapTimestamp(plan.created_at);
+    return created !== null && created >= start && created < dayEightStarts;
+  });
+}
+
+function buildDay7Insight(input: {
+  helpful: RecapAttempt[];
+  difficult: RecapAttempt[];
+  unresolved: RecapAttempt[];
+  repeated: string[];
+  outcomesRecorded: number;
+}) {
+  const repeatedTitle = input.repeated[0] ?? null;
+  const oneHelpful = input.helpful[0] ?? null;
+  const latestDifficult = input.difficult[0] ?? null;
+  const openLoop = input.unresolved[0] ?? null;
+
+  let workingHypothesis =
+    "За первую неделю пока недостаточно сохранённых outcomes, чтобы выделить рабочий навык.";
+  let confidenceLevel: "low" | "limited" = "low";
+  let confidence =
+    "Низкая уверенность: данных мало или они неполные. Итог описывает только сохранённые самоотчёты и не объясняет причины.";
+  let nextExperiment = {
+    kind: "first_try" as
+      | "transfer"
+      | "repeat"
+      | "resize"
+      | "replace"
+      | "close_loop"
+      | "first_try",
+    title: "Проверить один новый маленький шаг",
+    prompt:
+      "Выбрать одно посильное действие, выполнить или честно не выполнить его и сохранить outcome с оценкой полезности.",
+  };
+
+  if (repeatedTitle) {
+    const count = input.helpful.filter(
+      (plan) => plan.skill_title === repeatedTitle,
+    ).length;
+    workingHypothesis = `Рабочая гипотеза: «${repeatedTitle}» может быть для тебя повторяемым полезным шагом. Основание — ${count} сохранённых outcomes с полезностью не ниже 6/10.`;
+    confidenceLevel = "limited";
+    confidence =
+      "Ограниченная уверенность: результат повторился, но это самоотчёт за одну неделю без контрольного сравнения. Совпадение не доказывает причину улучшения.";
+    nextExperiment = {
+      kind: "transfer",
+      title: `Проверить перенос «${repeatedTitle}»`,
+      prompt:
+        "Использовать навык в другом независимо подходящем типе ситуации и снова сохранить outcome и helpfulness.",
+    };
+  } else if (oneHelpful) {
+    workingHypothesis = `Рабочая гипотеза: «${oneHelpful.skill_title}» стоит проверить повторно. Основание — один завершённый outcome с полезностью ${oneHelpful.helpfulness}/10.`;
+    nextExperiment = {
+      kind: "repeat",
+      title: `Повторить «${oneHelpful.skill_title}»`,
+      prompt:
+        "Проверить тот же навык в похожей конкретной ситуации и снова отметить фактический результат.",
+    };
+  } else if (latestDifficult) {
+    const lowFit =
+      latestDifficult.helpfulness !== null &&
+      latestDifficult.helpfulness <= 3;
+    const evidence =
+      latestDifficult.helpfulness === null
+        ? recapResult(latestDifficult.result!)
+        : `${recapResult(latestDifficult.result!)}, полезность ${latestDifficult.helpfulness}/10`;
+    workingHypothesis = `Рабочая гипотеза: «${latestDifficult.skill_title}» в прежнем виде пока не подтверждён как полезный. Основание — сохранённый outcome: ${evidence}. Причина результата неизвестна.`;
+    nextExperiment = lowFit
+      ? {
+          kind: "replace",
+          title: `Подобрать замену для «${latestDifficult.skill_title}»`,
+          prompt:
+            "В новом конкретном эпизоде выбрать другой безопасный навык и сравнить outcome.",
+        }
+      : {
+          kind: "resize",
+          title: `Уменьшить «${latestDifficult.skill_title}»`,
+          prompt:
+            "Оставить только первый короткий элемент действия и отдельно оценить его результат.",
+        };
+  } else if (openLoop) {
+    workingHypothesis = `По «${openLoop.skill_title}» нельзя сделать вывод: действие сохранено, но фактический outcome неизвестен.`;
+    nextExperiment = {
+      kind: "close_loop",
+      title: `Закрыть результат «${openLoop.skill_title}»`,
+      prompt:
+        "Сначала отметить, была ли попытка и чем она закончилась; до этого новый вывод не строится.",
+    };
+  } else if (input.outcomesRecorded > 0) {
+    workingHypothesis =
+      "За неделю outcomes сохранены, но ни один навык ещё не получил устойчивого полезного сигнала.";
+  }
+
+  return {
+    workingHypothesis,
+    confidenceLevel,
+    confidence,
+    nextExperiment,
+  };
+}
+
 export function buildRecap(
   plans: RecapAttempt[],
   eventDays: number[] = [],
+  startedAt?: string,
 ) {
-  const attempted = plans.filter(
+  const scopedPlans = firstWeekPlans(plans, startedAt);
+  const attempted = scopedPlans.filter(
     (plan) => Boolean(plan.attempt_id) || plan.result !== null,
   );
-  const outcomes = plans.filter((plan) => plan.result !== null);
+  const outcomes = scopedPlans.filter((plan) => plan.result !== null);
   const successful = outcomes.filter(
     (plan) => plan.result === "done" || plan.result === "more",
   );
@@ -91,12 +207,12 @@ export function buildRecap(
     (title) =>
       helpful.filter((plan) => plan.skill_title === title).length >= 2,
   );
-  const unresolved = plans.filter((plan) => plan.result === null);
+  const unresolved = scopedPlans.filter((plan) => plan.result === null);
   const missingHelpfulness = outcomes.filter(
     (plan) => plan.helpfulness === null,
   );
 
-  const facts = plans.map((plan) => {
+  const facts = scopedPlans.map((plan) => {
     if (plan.result === null) {
       return plan.attempt_id
         ? `«${plan.skill_title}»: попытка начата; итог не отмечен.`
@@ -138,17 +254,26 @@ export function buildRecap(
   }
 
   return {
-    proposed: plans.length,
+    proposed: scopedPlans.length,
     attempts: attempted.length,
     outcomesRecorded: outcomes.length,
     completed: successful.length,
-    engagedDays: [...new Set(eventDays)].sort((a, b) => a - b),
-    skills: unique(plans.map((plan) => plan.skill_title)),
+    engagedDays: [...new Set(eventDays)]
+      .filter((day) => day >= 1 && day <= 7)
+      .sort((a, b) => a - b),
+    skills: unique(scopedPlans.map((plan) => plan.skill_title)),
     facts,
     helpful: helpfulSkills,
     difficult: unique(difficult.map((plan) => plan.skill_title)),
     repeated,
     unknown,
     next,
+    day7: buildDay7Insight({
+      helpful,
+      difficult,
+      unresolved,
+      repeated,
+      outcomesRecorded: outcomes.length,
+    }),
   };
 }

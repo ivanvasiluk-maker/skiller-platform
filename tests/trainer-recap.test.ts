@@ -83,3 +83,86 @@ test("repeated helpfulness requires two saved helpful outcomes", () => {
   assert.deepEqual(recap.repeated, ["Микростарт"]);
   assert.match(recap.next, /причина улучшения пока не доказана/);
 });
+
+test("Day 7 recap excludes plans and events from Day 8", () => {
+  const startedAt = "2026-09-14T08:00:00.000Z";
+  const recap = buildRecap([
+    plan({
+      skill_title: "Поздний навык",
+      attempt_id: "attempt-day-8",
+      result: "done",
+      helpfulness: 10,
+      created_at: "2026-09-21T08:00:00.000Z",
+    }),
+    plan({
+      skill_title: "Навык первой недели",
+      attempt_id: "attempt-day-7",
+      result: "done",
+      helpfulness: 7,
+      created_at: "2026-09-20T08:00:00.000Z",
+    }),
+  ], [1, 3, 7, 8], startedAt);
+
+  assert.equal(recap.proposed, 1);
+  assert.deepEqual(recap.skills, ["Навык первой недели"]);
+  assert.deepEqual(recap.engagedDays, [1, 3, 7]);
+  assert.doesNotMatch(recap.facts.join(" "), /Поздний навык/);
+});
+
+test("two helpful outcomes create only a limited working hypothesis", () => {
+  const recap = buildRecap([
+    plan({
+      attempt_id: "attempt-2",
+      result: "more",
+      helpfulness: 7,
+      created_at: "2026-09-16T10:00:00.000Z",
+    }),
+    plan({
+      attempt_id: "attempt-1",
+      result: "done",
+      helpfulness: 8,
+    }),
+  ], [1, 3], "2026-09-14T08:00:00.000Z");
+
+  assert.match(recap.day7.workingHypothesis, /2 сохранённых outcomes/);
+  assert.equal(recap.day7.confidenceLevel, "limited");
+  assert.match(recap.day7.confidence, /не доказывает причину/);
+  assert.equal(recap.day7.nextExperiment.kind, "transfer");
+});
+
+test("one helpful outcome stays low confidence and suggests repeat", () => {
+  const recap = buildRecap([
+    plan({
+      attempt_id: "attempt-1",
+      result: "done",
+      helpfulness: 8,
+    }),
+  ], [1], "2026-09-14T08:00:00.000Z");
+
+  assert.match(recap.day7.workingHypothesis, /один завершённый outcome/);
+  assert.equal(recap.day7.confidenceLevel, "low");
+  assert.equal(recap.day7.nextExperiment.kind, "repeat");
+});
+
+test("low-fit evidence suggests replacement without inventing a cause", () => {
+  const recap = buildRecap([
+    plan({
+      attempt_id: "attempt-1",
+      result: "done",
+      helpfulness: 2,
+    }),
+  ], [1], "2026-09-14T08:00:00.000Z");
+
+  assert.equal(recap.day7.nextExperiment.kind, "replace");
+  assert.match(recap.day7.workingHypothesis, /Причина результата неизвестна/);
+  assert.doesNotMatch(recap.day7.workingHypothesis, /потому что/);
+});
+
+test("an unresolved week ends with closing the open loop", () => {
+  const recap = buildRecap([
+    plan({ attempt_id: "attempt-1" }),
+  ], [1], "2026-09-14T08:00:00.000Z");
+
+  assert.equal(recap.day7.nextExperiment.kind, "close_loop");
+  assert.match(recap.day7.workingHypothesis, /outcome неизвестен/);
+});
