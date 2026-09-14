@@ -98,6 +98,17 @@ async function runScenario(baseUrl, scenario) {
   return body;
 }
 
+async function runIdempotentRequest(baseUrl, requestId) {
+  const response = await fetch(`${baseUrl}/idempotency`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ requestId }),
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  return body;
+}
+
 let worker;
 let logs = "";
 try {
@@ -147,6 +158,7 @@ try {
     decisionVersion: "outcome-policy-v1",
     selectedSkillId: "micro-start",
     shouldResize: false,
+    storedOutcomeCount: 0,
   });
 
   const repeatHelpful = await runScenario(baseUrl, "repeat_helpful");
@@ -156,6 +168,7 @@ try {
     decisionVersion: "outcome-policy-v1",
     selectedSkillId: "micro-start",
     shouldResize: false,
+    storedOutcomeCount: 1,
   });
 
   const resizeAfterFailed = await runScenario(baseUrl, "resize_after_failed");
@@ -165,6 +178,7 @@ try {
     decisionVersion: "outcome-policy-v1",
     selectedSkillId: "micro-start",
     shouldResize: true,
+    storedOutcomeCount: 1,
   });
 
   const replaceLowFit = await runScenario(baseUrl, "replace_low_fit");
@@ -174,10 +188,31 @@ try {
     decisionVersion: "outcome-policy-v1",
     selectedSkillId: "distract-delay",
     shouldResize: false,
+    storedOutcomeCount: 1,
   });
 
+  const safetyOverride = await runScenario(baseUrl, "safety_override");
+  assert.deepEqual(safetyOverride, {
+    prior: null,
+    reasonCode: null,
+    decisionVersion: "outcome-policy-v1",
+    selectedSkillId: "micro-start",
+    shouldResize: false,
+    storedOutcomeCount: 1,
+  });
+
+  const requestId = "00000000-0000-4000-8000-000000000043";
+  const firstRequest = await runIdempotentRequest(baseUrl, requestId);
+  const repeatedRequest = await runIdempotentRequest(baseUrl, requestId);
+  assert.deepEqual(firstRequest, { requestId, mutationCount: 1 });
+  assert.deepEqual(repeatedRequest, firstRequest);
+  const countResponse = await fetch(
+    `${baseUrl}/idempotency-count?requestId=${requestId}`,
+  );
+  assert.deepEqual(await countResponse.json(), { mutationCount: 1 });
+
   console.log(
-    "D1 recommendation integration passed: first_try, repeat_helpful, resize_after_failed, and replace_low_fit use migrated history and production decision code.",
+    "D1 recommendation integration passed: five recommendation branches use migrated history; duplicate request mutates once.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");

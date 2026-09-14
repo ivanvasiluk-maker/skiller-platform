@@ -2,6 +2,10 @@ import {
   decideRecommendationFromD1,
   type D1RecommendationDecision,
 } from "../lib/outcome-history";
+import {
+  cacheIdempotentResponse,
+  claimIdempotentRequest,
+} from "../lib/request-idempotency";
 
 type Env = { DB: D1Database };
 const scenarios = [
@@ -9,6 +13,7 @@ const scenarios = [
   "repeat_helpful",
   "resize_after_failed",
   "replace_low_fit",
+  "safety_override",
 ] as const;
 type Scenario = (typeof scenarios)[number];
 
@@ -53,7 +58,7 @@ async function seedOutcome(
 async function runScenario(
   db: D1Database,
   scenario: Scenario,
-): Promise<D1RecommendationDecision> {
+): Promise<D1RecommendationDecision & { storedOutcomeCount: number }> {
   const userId = `integration-${scenario}-${crypto.randomUUID()}`;
   const skillId = "micro-start";
   const kind = "stuck";
@@ -76,7 +81,7 @@ async function runScenario(
     ),
   ]);
 
-  if (scenario === "repeat_helpful") {
+  if (scenario === "repeat_helpful" || scenario === "safety_override") {
     await seedOutcome(db, userId, skillId, kind, {
       completed: true,
       helpfulness: 7,
@@ -96,13 +101,56 @@ async function runScenario(
     });
   }
 
-  return decideRecommendationFromD1({
+  const decision = await decideRecommendationFromD1({
     db,
     userId,
     kind,
     skillId,
-    safetyAllowsPractice: true,
+    safetyAllowsPractice: scenario !== "safety_override",
   });
+  const stored = await db
+    .prepare("SELECT count(*) AS count FROM outcomes WHERE user_id=?")
+    .bind(userId)
+    .first<{ count: number }>();
+  return { ...decision, storedOutcomeCount: Number(stored?.count ?? 0) };
+}
+
+type IdempotencyResponse = { requestId: string; mutationCount: number };
+
+async function ensureIdempotencyStorage(db: D1Database) {
+  await db.batch([
+    db.prepare("CREATE TABLE IF NOT EXISTS trainer_requests (user_id TEXT NOT NULL, request_id TEXT NOT NULL, response_json TEXT, created_at TEXT NOT NULL, PRIMARY KEY(user_id, request_id))"),
+    db.prepare("CREATE TABLE IF NOT EXISTS integration_mutations (request_id TEXT PRIMARY KEY, created_at TEXT NOT NULL)"),
+  ]);
+}
+
+async function runIdempotentMutation(
+  db: D1Database,
+  requestId: string,
+): Promise<IdempotencyResponse> {
+  const userId = "integration-idempotency-user";
+  await ensureIdempotencyStorage(db);
+  const claim = await claimIdempotentRequest<IdempotencyResponse>(
+    db,
+    userId,
+    requestId,
+  );
+  if (claim.state === "cached") return claim.response;
+  if (claim.state === "in_flight") {
+    throw new Error("Duplicate request is still in flight.");
+  }
+
+  await db
+    .prepare("INSERT INTO integration_mutations (request_id,created_at) VALUES (?,?)")
+    .bind(requestId, new Date().toISOString())
+    .run();
+  const row = await db
+    .prepare("SELECT count(*) AS count FROM integration_mutations WHERE request_id=?")
+    .bind(requestId)
+    .first<{ count: number }>();
+  const response = { requestId, mutationCount: Number(row?.count ?? 0) };
+  await cacheIdempotentResponse(db, userId, requestId, response);
+  return response;
 }
 
 const worker: ExportedHandler<Env> = {
@@ -111,6 +159,22 @@ const worker: ExportedHandler<Env> = {
     if (request.method === "GET" && url.pathname === "/health") {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
       return Response.json(row);
+    }
+    if (request.method === "POST" && url.pathname === "/idempotency") {
+      const body = await request.json<{ requestId?: string }>();
+      if (!body.requestId) {
+        return Response.json({ error: "requestId is required" }, { status: 400 });
+      }
+      return Response.json(await runIdempotentMutation(env.DB, body.requestId));
+    }
+    if (request.method === "GET" && url.pathname === "/idempotency-count") {
+      await ensureIdempotencyStorage(env.DB);
+      const requestId = url.searchParams.get("requestId") ?? "";
+      const row = await env.DB
+        .prepare("SELECT count(*) AS count FROM integration_mutations WHERE request_id=?")
+        .bind(requestId)
+        .first<{ count: number }>();
+      return Response.json({ mutationCount: Number(row?.count ?? 0) });
     }
     if (request.method !== "POST" || url.pathname !== "/scenario") {
       return new Response("Not found", { status: 404 });
