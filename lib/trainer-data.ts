@@ -16,7 +16,7 @@ const statements = [
   "CREATE TABLE IF NOT EXISTS trainer_profiles (user_id TEXT PRIMARY KEY, pseudonym TEXT NOT NULL UNIQUE, name TEXT NOT NULL, trainer_id TEXT NOT NULL, interaction_mode TEXT NOT NULL DEFAULT 'explore', main_problem TEXT NOT NULL, consent_version TEXT NOT NULL, created_at TEXT NOT NULL, last_interaction_at TEXT NOT NULL, safety_flag INTEGER NOT NULL DEFAULT 0)",
   "CREATE TABLE IF NOT EXISTS trainer_messages (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, trainer_id TEXT NOT NULL, created_at TEXT NOT NULL)",
   "CREATE INDEX IF NOT EXISTS trainer_messages_user ON trainer_messages(user_id, created_at)",
-  "CREATE TABLE IF NOT EXISTS trainer_plans (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, situation_id TEXT NOT NULL, skill_json TEXT NOT NULL, skill_title TEXT NOT NULL, entry_mode TEXT NOT NULL, intensity_before INTEGER NOT NULL, intensity_after INTEGER, attempt_id TEXT, result TEXT, helpfulness INTEGER, decision_reason_code TEXT NOT NULL DEFAULT 'first_try', decision_version TEXT NOT NULL DEFAULT 'outcome-policy-v1', created_at TEXT NOT NULL)",
+  "CREATE TABLE IF NOT EXISTS trainer_plans (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, situation_id TEXT NOT NULL, skill_json TEXT NOT NULL, skill_title TEXT NOT NULL, entry_mode TEXT NOT NULL, intensity_before INTEGER NOT NULL, intensity_after INTEGER, attempt_id TEXT, result TEXT, helpfulness INTEGER, decision_reason_code TEXT NOT NULL DEFAULT 'first_try', decision_version TEXT NOT NULL DEFAULT 'outcome-policy-v2', created_at TEXT NOT NULL)",
   "CREATE INDEX IF NOT EXISTS trainer_plans_user ON trainer_plans(user_id, created_at)",
   "CREATE TABLE IF NOT EXISTS pilot_events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL, trainer_id TEXT NOT NULL, day_index INTEGER NOT NULL, event_name TEXT NOT NULL, payload_json TEXT NOT NULL, product_version TEXT NOT NULL, created_at TEXT NOT NULL, exported_at TEXT)",
   "CREATE INDEX IF NOT EXISTS pilot_events_user ON pilot_events(user_id, day_index)",
@@ -28,7 +28,7 @@ export async function ensureTrainerStorage() {
   await db.batch(statements.map(s => db.prepare(s)));
   for (const statement of [
     "ALTER TABLE trainer_plans ADD decision_reason_code TEXT NOT NULL DEFAULT 'first_try'",
-    "ALTER TABLE trainer_plans ADD decision_version TEXT NOT NULL DEFAULT 'outcome-policy-v1'",
+    "ALTER TABLE trainer_plans ADD decision_version TEXT NOT NULL DEFAULT 'outcome-policy-v2'",
   ]) {
     try {
       await db.prepare(statement).run();
@@ -160,9 +160,9 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         if (recommendation.skill) {
           const skill = recommendation.skill;
           await db.prepare("INSERT INTO trainer_plans (id,user_id,situation_id,skill_json,skill_title,entry_mode,intensity_before,decision_reason_code,decision_version,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
-            .bind(key, user.userId, recommendation.situationId, JSON.stringify(skill), skill.title, mode, body.intensity ?? 5, recommendation.reasonCode ?? "first_try", recommendation.decisionVersion ?? "outcome-policy-v1", new Date().toISOString()).run();
+            .bind(key, user.userId, recommendation.situationId, JSON.stringify(skill), skill.title, mode, body.intensity ?? 5, recommendation.reasonCode ?? "first_try", recommendation.decisionVersion ?? "outcome-policy-v2", new Date().toISOString()).run();
           await message(profile, "assistant", `${trainers[profile.trainer_id].greeting} ${recommendation.reason ?? ""} Попробуем «${skill.title}».`, `${key}:reply`);
-          await event(profile, body.sessionId, "skill_recommended", key, { skill_id: skill.id, skill_version: "1.0", decision_reason_code: recommendation.reasonCode ?? "first_try", decision_version: recommendation.decisionVersion ?? "outcome-policy-v1" });
+          await event(profile, body.sessionId, "skill_recommended", key, { skill_id: skill.id, skill_version: "1.0", decision_reason_code: recommendation.reasonCode ?? "first_try", decision_version: recommendation.decisionVersion ?? "outcome-policy-v2" });
           if (recommendation.analysis) await event(profile, body.sessionId, "mechanism_generated", key);
         }
       }
@@ -209,8 +209,8 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         }
         const decisionReasonCode = body.action === "resize" ? "resize_after_failed" : "replace_low_fit";
         await db.prepare("INSERT INTO trainer_plans (id,user_id,situation_id,skill_json,skill_title,entry_mode,intensity_before,decision_reason_code,decision_version,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
-          .bind(key, user.userId, plan.situation_id, JSON.stringify(next), next.title, plan.entry_mode, plan.intensity_before, decisionReasonCode, "outcome-policy-v1", new Date().toISOString()).run();
-        await event(profile, body.sessionId, body.action === "resize" ? "action_resized" : "action_replaced", key, { skill_id: next.id, decision_reason_code: decisionReasonCode, decision_version: "outcome-policy-v1" });
+          .bind(key, user.userId, plan.situation_id, JSON.stringify(next), next.title, plan.entry_mode, plan.intensity_before, decisionReasonCode, "outcome-policy-v2", new Date().toISOString()).run();
+        await event(profile, body.sessionId, body.action === "resize" ? "action_resized" : "action_replaced", key, { skill_id: next.id, decision_reason_code: decisionReasonCode, decision_version: "outcome-policy-v2" });
       }
     }
     if (body.action === "recap") {

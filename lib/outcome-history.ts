@@ -22,13 +22,34 @@ export type CompatibleOutcome = {
   avoidance: boolean;
 };
 
+type OutcomeRow = {
+  completed: number;
+  helpfulness: number;
+  avoidance: number;
+  context_kind: string;
+};
+
+type TransferEvidence = {
+  outcome: CompatibleOutcome;
+  contextKind: string;
+};
+
 export type D1RecommendationDecision = {
   prior: CompatibleOutcome | null;
+  evidenceContextKind: string | null;
   reasonCode: OutcomeReasonCode | null;
   decisionVersion: string;
   selectedSkillId: string;
   shouldResize: boolean;
 };
+
+function toOutcome(row: OutcomeRow): CompatibleOutcome {
+  return {
+    completed: Boolean(row.completed),
+    helpfulness: row.helpfulness,
+    avoidance: Boolean(row.avoidance),
+  };
+}
 
 export async function readLatestCompatibleOutcome(
   db: D1Database,
@@ -41,22 +62,55 @@ export async function readLatestCompatibleOutcome(
       SELECT
         o.completed AS completed,
         o.helpfulness AS helpfulness,
-        o.avoidance AS avoidance
+        o.avoidance AS avoidance,
+        s.kind AS context_kind
       FROM outcomes o
       INNER JOIN skill_attempts a ON o.attempt_id = a.id
       INNER JOIN situations s ON a.situation_id = s.id
       WHERE o.user_id = ? AND s.kind = ? AND a.skill_id = ?
-      ORDER BY o.created_at DESC
+      ORDER BY o.created_at DESC, o.rowid DESC
       LIMIT 1
     `)
     .bind(userId, kind, skillId)
-    .first<{ completed: number; helpfulness: number; avoidance: number }>();
+    .first<OutcomeRow>();
 
-  if (!row) return null;
+  return row ? toOutcome(row) : null;
+}
+
+export async function readLatestTransferEvidence(
+  db: D1Database,
+  userId: string,
+  targetKind: string,
+  skillId: string,
+): Promise<TransferEvidence | null> {
+  const row = await db
+    .prepare(`
+      SELECT
+        o.completed AS completed,
+        o.helpfulness AS helpfulness,
+        o.avoidance AS avoidance,
+        s.kind AS context_kind
+      FROM outcomes o
+      INNER JOIN skill_attempts a ON o.attempt_id = a.id
+      INNER JOIN situations s ON a.situation_id = s.id
+      WHERE o.user_id = ? AND s.kind <> ? AND a.skill_id = ?
+      ORDER BY o.created_at DESC, o.rowid DESC
+      LIMIT 1
+    `)
+    .bind(userId, targetKind, skillId)
+    .first<OutcomeRow>();
+
+  if (
+    !row ||
+    !Boolean(row.completed) ||
+    row.helpfulness < 6 ||
+    Boolean(row.avoidance)
+  ) {
+    return null;
+  }
   return {
-    completed: Boolean(row.completed),
-    helpfulness: row.helpfulness,
-    avoidance: Boolean(row.avoidance),
+    outcome: toOutcome(row),
+    contextKind: row.context_kind,
   };
 }
 
@@ -67,7 +121,7 @@ export async function decideRecommendationFromD1(input: {
   skillId: string;
   safetyAllowsPractice: boolean;
 }): Promise<D1RecommendationDecision> {
-  const prior = input.safetyAllowsPractice
+  const sameContextPrior = input.safetyAllowsPractice
     ? await readLatestCompatibleOutcome(
         input.db,
         input.userId,
@@ -75,16 +129,30 @@ export async function decideRecommendationFromD1(input: {
         input.skillId,
       )
     : null;
+  const transferEvidence =
+    input.safetyAllowsPractice && !sameContextPrior
+      ? await readLatestTransferEvidence(
+          input.db,
+          input.userId,
+          input.kind,
+          input.skillId,
+        )
+      : null;
+  const prior = sameContextPrior ?? transferEvidence?.outcome ?? null;
   const reasonCode = decideNextStep({
     safetyAllowsPractice: input.safetyAllowsPractice,
     hasCompatibleEvidence: Boolean(prior),
     completed: prior?.completed ?? null,
     helpfulness: prior?.helpfulness ?? null,
     avoidanceIncreased: prior?.avoidance ?? false,
+    isNewContext: Boolean(transferEvidence),
   });
 
   return {
     prior,
+    evidenceContextKind: sameContextPrior
+      ? input.kind
+      : transferEvidence?.contextKind ?? null,
     reasonCode,
     decisionVersion: OUTCOME_POLICY_VERSION,
     selectedSkillId:

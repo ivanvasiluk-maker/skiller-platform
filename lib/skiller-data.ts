@@ -259,7 +259,7 @@ async function createStorage() {
   await db.batch([
     db.prepare("CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY NOT NULL, email text NOT NULL, display_name text NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, updated_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS skills (id text PRIMARY KEY NOT NULL, title text NOT NULL, approach text NOT NULL, track text NOT NULL, description text NOT NULL, why text NOT NULL, steps_json text NOT NULL, duration_seconds integer NOT NULL, autonomous integer DEFAULT true NOT NULL, active integer DEFAULT true NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
-    db.prepare("CREATE TABLE IF NOT EXISTS situations (id text PRIMARY KEY NOT NULL, user_id text NOT NULL, kind text NOT NULL, description text DEFAULT '' NOT NULL, first_signal text DEFAULT 'emotion' NOT NULL, action_urge text DEFAULT 'pause' NOT NULL, desired_direction text DEFAULT 'stabilize' NOT NULL, important_goal text DEFAULT '' NOT NULL, change_point text DEFAULT 'before_action' NOT NULL, recommendation_reason text DEFAULT '' NOT NULL, decision_reason_code text DEFAULT 'first_try' NOT NULL, decision_version text DEFAULT 'outcome-policy-v1' NOT NULL, confirmed_text text DEFAULT '' NOT NULL, chain_json text DEFAULT '' NOT NULL, ai_analysis_json text DEFAULT '' NOT NULL, intensity integer NOT NULL, safety_status text NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
+    db.prepare("CREATE TABLE IF NOT EXISTS situations (id text PRIMARY KEY NOT NULL, user_id text NOT NULL, kind text NOT NULL, description text DEFAULT '' NOT NULL, first_signal text DEFAULT 'emotion' NOT NULL, action_urge text DEFAULT 'pause' NOT NULL, desired_direction text DEFAULT 'stabilize' NOT NULL, important_goal text DEFAULT '' NOT NULL, change_point text DEFAULT 'before_action' NOT NULL, recommendation_reason text DEFAULT '' NOT NULL, decision_reason_code text DEFAULT 'first_try' NOT NULL, decision_version text DEFAULT 'outcome-policy-v2' NOT NULL, confirmed_text text DEFAULT '' NOT NULL, chain_json text DEFAULT '' NOT NULL, ai_analysis_json text DEFAULT '' NOT NULL, intensity integer NOT NULL, safety_status text NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS skill_attempts (id text PRIMARY KEY NOT NULL, user_id text NOT NULL, situation_id text, skill_id text NOT NULL, mode text NOT NULL, status text DEFAULT 'started' NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL, completed_at text)"),
     db.prepare("CREATE TABLE IF NOT EXISTS outcomes (id text PRIMARY KEY NOT NULL, attempt_id text NOT NULL, user_id text NOT NULL, completed integer DEFAULT true NOT NULL, relief_delta integer NOT NULL, goal_progress integer NOT NULL, helpfulness integer NOT NULL, avoidance integer DEFAULT false NOT NULL, note text DEFAULT '' NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
     db.prepare("CREATE TABLE IF NOT EXISTS delayed_outcomes (id text PRIMARY KEY NOT NULL, attempt_id text NOT NULL, user_id text NOT NULL, goal_progress integer NOT NULL, helpfulness integer NOT NULL, avoidance integer DEFAULT false NOT NULL, note text DEFAULT '' NOT NULL, created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL)"),
@@ -272,7 +272,7 @@ async function createStorage() {
     "ALTER TABLE situations ADD chain_json text DEFAULT '' NOT NULL",
     "ALTER TABLE situations ADD ai_analysis_json text DEFAULT '' NOT NULL",
     "ALTER TABLE situations ADD decision_reason_code text DEFAULT 'first_try' NOT NULL",
-    "ALTER TABLE situations ADD decision_version text DEFAULT 'outcome-policy-v1' NOT NULL",
+    "ALTER TABLE situations ADD decision_version text DEFAULT 'outcome-policy-v2' NOT NULL",
     "ALTER TABLE skill_attempts ADD created_at text DEFAULT CURRENT_TIMESTAMP NOT NULL",
     "ALTER TABLE outcomes ADD completed integer DEFAULT true NOT NULL",
   ]) {
@@ -536,6 +536,9 @@ function decisionReason(
   }
   if (reasonCode === OUTCOME_REASON_CODES.repeatHelpful) {
     return "В похожей ситуации этот навык уже помог и получил оценку не ниже 6 из 10. Проверим, работает ли он повторно.";
+  }
+  if (reasonCode === OUTCOME_REASON_CODES.transferHelpful) {
+    return "Этот навык был полезен в другом типе ситуации, а базовый подбор независимо допускает его здесь. Проверим перенос как новый эксперимент, не считая эффект доказанным.";
   }
   if (reasonCode === OUTCOME_REASON_CODES.resizeAfterFailed) {
     return "В прошлый раз полный шаг не получился. Оставим только первый короткий элемент и проверим его отдельно.";

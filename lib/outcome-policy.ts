@@ -1,8 +1,9 @@
-export const OUTCOME_POLICY_VERSION = "outcome-policy-v1";
+export const OUTCOME_POLICY_VERSION = "outcome-policy-v2";
 
 export const OUTCOME_REASON_CODES = {
   firstTry: "first_try",
   repeatHelpful: "repeat_helpful",
+  transferHelpful: "transfer_helpful",
   resizeAfterFailed: "resize_after_failed",
   replaceLowFit: "replace_low_fit",
 } as const;
@@ -16,6 +17,7 @@ export type OutcomePolicyInput = {
   completed?: boolean | null;
   helpfulness?: number | null;
   avoidanceIncreased?: boolean;
+  isNewContext?: boolean;
 };
 
 export function decideNextStep(
@@ -44,7 +46,9 @@ export function decideNextStep(
     facts.helpfulness !== null &&
     facts.helpfulness >= 6
   ) {
-    return OUTCOME_REASON_CODES.repeatHelpful;
+    return facts.isNewContext
+      ? OUTCOME_REASON_CODES.transferHelpful
+      : OUTCOME_REASON_CODES.repeatHelpful;
   }
   return OUTCOME_REASON_CODES.firstTry;
 }
