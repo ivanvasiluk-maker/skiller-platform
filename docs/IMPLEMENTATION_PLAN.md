@@ -96,7 +96,7 @@
 
 ### Задачи
 
-- [ ] Выделить чистую функцию ranking/selection без запросов к БД.
+- [x] Выделить чистую outcome-policy функцию без запросов к БД (Round 1.1; подключение ranking к D1 — Round 1.2).
 - [ ] Перед подбором читать evidence, последний outcome и совместимые контексты.
 - [ ] Добавить reason codes: `repeat_helpful`, `transfer`, `resize_after_failed`, `replace_low_fit`, `first_try`.
 - [ ] Сохранять reason code и version решения в plan/event.
