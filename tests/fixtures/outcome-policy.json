@@ -86,5 +86,17 @@
       "avoidance_increased": false
     },
     "expected": "first_try"
+  },
+  {
+    "name": "helpful completion in a different eligible context transfers",
+    "facts": {
+      "safety_allows_practice": true,
+      "has_compatible_evidence": true,
+      "completed": true,
+      "helpfulness": 7,
+      "avoidance_increased": false,
+      "is_new_context": true
+    },
+    "expected": "transfer_helpful"
   }
 ]

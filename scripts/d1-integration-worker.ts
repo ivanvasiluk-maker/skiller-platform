@@ -13,6 +13,7 @@ const scenarios = [
   "repeat_helpful",
   "resize_after_failed",
   "replace_low_fit",
+  "transfer_helpful",
   "safety_override",
 ] as const;
 type Scenario = (typeof scenarios)[number];
@@ -81,7 +82,13 @@ async function runScenario(
     ),
   ]);
 
-  if (scenario === "repeat_helpful" || scenario === "safety_override") {
+  if (scenario === "transfer_helpful") {
+    await seedOutcome(db, userId, skillId, "conflict", {
+      completed: true,
+      helpfulness: 7,
+      avoidance: false,
+    });
+  } else if (scenario === "repeat_helpful" || scenario === "safety_override") {
     await seedOutcome(db, userId, skillId, kind, {
       completed: true,
       helpfulness: 7,

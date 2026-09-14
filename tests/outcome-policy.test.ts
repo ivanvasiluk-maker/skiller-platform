@@ -12,6 +12,7 @@ type Fixture = {
     completed: boolean | null;
     helpfulness: number | null;
     avoidance_increased: boolean;
+    is_new_context?: boolean;
   };
   expected: string | null;
 };
@@ -29,6 +30,7 @@ for (const fixture of fixtures) {
       completed: fixture.facts.completed,
       helpfulness: fixture.facts.helpfulness,
       avoidanceIncreased: fixture.facts.avoidance_increased,
+      isNewContext: fixture.facts.is_new_context ?? false,
     });
 
     assert.equal(result, fixture.expected);

@@ -154,8 +154,9 @@ try {
   const firstTry = await runScenario(baseUrl, "first_try");
   assert.deepEqual(firstTry, {
     prior: null,
+    evidenceContextKind: null,
     reasonCode: "first_try",
-    decisionVersion: "outcome-policy-v1",
+    decisionVersion: "outcome-policy-v2",
     selectedSkillId: "micro-start",
     shouldResize: false,
     storedOutcomeCount: 0,
@@ -164,8 +165,9 @@ try {
   const repeatHelpful = await runScenario(baseUrl, "repeat_helpful");
   assert.deepEqual(repeatHelpful, {
     prior: { completed: true, helpfulness: 7, avoidance: false },
+    evidenceContextKind: "stuck",
     reasonCode: "repeat_helpful",
-    decisionVersion: "outcome-policy-v1",
+    decisionVersion: "outcome-policy-v2",
     selectedSkillId: "micro-start",
     shouldResize: false,
     storedOutcomeCount: 1,
@@ -174,8 +176,9 @@ try {
   const resizeAfterFailed = await runScenario(baseUrl, "resize_after_failed");
   assert.deepEqual(resizeAfterFailed, {
     prior: { completed: false, helpfulness: 5, avoidance: false },
+    evidenceContextKind: "stuck",
     reasonCode: "resize_after_failed",
-    decisionVersion: "outcome-policy-v1",
+    decisionVersion: "outcome-policy-v2",
     selectedSkillId: "micro-start",
     shouldResize: true,
     storedOutcomeCount: 1,
@@ -184,9 +187,21 @@ try {
   const replaceLowFit = await runScenario(baseUrl, "replace_low_fit");
   assert.deepEqual(replaceLowFit, {
     prior: { completed: true, helpfulness: 2, avoidance: false },
+    evidenceContextKind: "stuck",
     reasonCode: "replace_low_fit",
-    decisionVersion: "outcome-policy-v1",
+    decisionVersion: "outcome-policy-v2",
     selectedSkillId: "distract-delay",
+    shouldResize: false,
+    storedOutcomeCount: 1,
+  });
+
+  const transferHelpful = await runScenario(baseUrl, "transfer_helpful");
+  assert.deepEqual(transferHelpful, {
+    prior: { completed: true, helpfulness: 7, avoidance: false },
+    evidenceContextKind: "conflict",
+    reasonCode: "transfer_helpful",
+    decisionVersion: "outcome-policy-v2",
+    selectedSkillId: "micro-start",
     shouldResize: false,
     storedOutcomeCount: 1,
   });
@@ -194,8 +209,9 @@ try {
   const safetyOverride = await runScenario(baseUrl, "safety_override");
   assert.deepEqual(safetyOverride, {
     prior: null,
+    evidenceContextKind: null,
     reasonCode: null,
-    decisionVersion: "outcome-policy-v1",
+    decisionVersion: "outcome-policy-v2",
     selectedSkillId: "micro-start",
     shouldResize: false,
     storedOutcomeCount: 1,
@@ -212,7 +228,7 @@ try {
   assert.deepEqual(await countResponse.json(), { mutationCount: 1 });
 
   console.log(
-    "D1 recommendation integration passed: five recommendation branches use migrated history; duplicate request mutates once.",
+    "D1 recommendation integration passed: six recommendation branches use migrated history, including cross-context transfer; duplicate request mutates once.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");

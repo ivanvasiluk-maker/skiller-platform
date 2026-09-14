@@ -98,7 +98,7 @@
 
 - [x] Выделить чистую outcome-policy функцию без запросов к БД (Round 1.1; подключение ranking к D1 — Round 1.2).
 - [x] Перед подбором читать последний outcome для совместимого контекста и текущего eligible-навыка.
-- [ ] Добавить reason codes: `repeat_helpful`, `transfer`, `resize_after_failed`, `replace_low_fit`, `first_try`.
+- [x] Добавить reason codes: `repeat_helpful`, `transfer_helpful`, `resize_after_failed`, `replace_low_fit`, `first_try` (Round 2.4b).
 - [x] Сохранять reason code и version решения в situation/plan/event.
 - [x] Не учитывать abandoned attempt как completion.
 - [ ] Сделать повторный outcome идемпотентным.
@@ -121,9 +121,9 @@
 - [x] Определить day state: `day_index`, `last_action`, `last_outcome`, `open_loop`, `next_check_at` (Round 2.1).
 - [x] Day 2: коротко напомнить действие Day 1 и спросить фактический результат (Round 2.2).
 - [x] Day 3: recap из attempts/outcomes/events с маркировкой неизвестного (Round 2.3).
-- [ ] Days 4–6: выбирать repeat, transfer, resize или replacement по evidence.
+- [x] Days 4–6: выбирать repeat, transfer, resize или replacement по evidence (Rounds 2.4a–2.4b).
   - [x] Карточка возврата repeat/resize/replacement использует outcome-policy и требует новый контекст (Round 2.4a).
-  - [ ] Transfer между контекстами: отдельный reason code и доказуемая совместимость (Round 2.4b).
+  - [x] Transfer между контекстами: отдельный `transfer_helpful` и доказуемая совместимость (Round 2.4b).
 - [ ] Day 7: недельный recap, рабочая гипотеза, ограничения уверенности и следующий эксперимент.
 - [ ] Возврат после пропуска: без стыда и потери прогресса.
 - [ ] Смена trainer/mode: сохранять plans, outcomes, events и day state.

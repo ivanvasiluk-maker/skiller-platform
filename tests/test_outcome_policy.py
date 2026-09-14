@@ -59,6 +59,13 @@ class OutcomePolicyTests(unittest.TestCase):
 
         self.assertIs(decision, OutcomeReasonCode.REPEAT_HELPFUL)
 
+    def test_helpful_completion_transfers_only_in_a_new_context(self) -> None:
+        decision = decide_next_step(
+            facts(completed=True, helpfulness=7, is_new_context=True)
+        )
+
+        self.assertIs(decision, OutcomeReasonCode.TRANSFER_HELPFUL)
+
     def test_failed_attempt_is_resized(self) -> None:
         decision = decide_next_step(facts(completed=False, helpfulness=5))
 
