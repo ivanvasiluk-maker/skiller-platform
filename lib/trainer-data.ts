@@ -58,7 +58,7 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
     day,
     messages: messages.results,
     plans: plans.results,
-    recap: buildRecap(plans.results, engagedDays),
+    recap: buildRecap(plans.results, engagedDays, profile.created_at),
     engagedDays,
     continuity: buildTrainerContinuity(plans.results, {
       day,

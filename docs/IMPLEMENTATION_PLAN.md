@@ -124,7 +124,7 @@
 - [x] Days 4–6: выбирать repeat, transfer, resize или replacement по evidence (Rounds 2.4a–2.4b).
   - [x] Карточка возврата repeat/resize/replacement использует outcome-policy и требует новый контекст (Round 2.4a).
   - [x] Transfer между контекстами: отдельный `transfer_helpful` и доказуемая совместимость (Round 2.4b).
-- [ ] Day 7: недельный recap, рабочая гипотеза, ограничения уверенности и следующий эксперимент.
+- [x] Day 7: недельный recap, рабочая гипотеза, ограничения уверенности и следующий эксперимент (Round 2.5).
 - [ ] Возврат после пропуска: без стыда и потери прогресса.
 - [ ] Смена trainer/mode: сохранять plans, outcomes, events и day state.
 - [x] Добавить overdue/open-loop карточку на главный экран (Round 2.1).
