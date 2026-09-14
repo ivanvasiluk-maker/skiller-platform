@@ -64,6 +64,7 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
       day,
       startedAt: profile.created_at,
       safetyAllowsPractice: !profile.safety_flag,
+      engagedDays,
     }),
   };
 }

@@ -52,6 +52,17 @@ export type TrainerContinuity = {
     prompt: string;
     actionLabel: string;
   } | null;
+  gapReturn: {
+    currentDay: number;
+    lastEngagedDay: number;
+    missedDays: number;
+    planId: string | null;
+    skillTitle: string | null;
+    entryMode: string;
+    safetyBlocked: boolean;
+    prompt: string;
+    actionLabel: string;
+  } | null;
   nextCheckAt: string | null;
 };
 
@@ -59,6 +70,7 @@ type ContinuityContext = {
   day?: number;
   startedAt?: string;
   safetyAllowsPractice?: boolean;
+  engagedDays?: number[];
 };
 
 function timestamp(value: string) {
@@ -199,6 +211,101 @@ function buildDays4to6(
   };
 }
 
+function engagementGap(
+  currentDay: number,
+  engagedDays: number[] = [],
+) {
+  if (currentDay <= 2 || engagedDays.includes(currentDay)) return null;
+  const priorDays = [1, ...engagedDays].filter(
+    (day) => day >= 1 && day < currentDay,
+  );
+  const lastEngagedDay = Math.max(...priorDays);
+  const missedDays = currentDay - lastEngagedDay - 1;
+  return missedDays > 0 ? { lastEngagedDay, missedDays } : null;
+}
+
+export function missedDaysFromEngagement(
+  currentDay: number,
+  engagedDays: number[] = [],
+) {
+  return engagementGap(currentDay, engagedDays)?.missedDays ?? 0;
+}
+
+function gapDayLabel(days: number) {
+  const mod10 = days % 10;
+  const mod100 = days % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${days} день`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) {
+    return `${days} дня`;
+  }
+  return `${days} дней`;
+}
+
+function buildGapReturn(
+  current: ContinuityPlan | null,
+  openLoop: TrainerContinuity["openLoop"],
+  context: ContinuityContext,
+): TrainerContinuity["gapReturn"] {
+  if (context.day === undefined) return null;
+  const gap = engagementGap(context.day, context.engagedDays);
+  if (!gap) return null;
+
+  const base = {
+    currentDay: context.day,
+    lastEngagedDay: gap.lastEngagedDay,
+    missedDays: gap.missedDays,
+    planId: current?.id ?? null,
+    skillTitle: current?.skill_title ?? null,
+    entryMode: current?.entry_mode ?? "stuck",
+  };
+  const pause = gapDayLabel(gap.missedDays);
+
+  if (context.safetyAllowsPractice === false) {
+    return {
+      ...base,
+      safetyBlocked: true,
+      prompt: `Ты вернулся после перерыва в ${pause}. Прогресс и сохранённые результаты на месте. Сначала спокойно проверим безопасность, затем решим, продолжать ли практику.`,
+      actionLabel: "Проверить безопасность",
+    };
+  }
+
+  if (openLoop) {
+    const next =
+      openLoop.kind === "failed"
+        ? "Сохранённый результат остаётся на месте: можно уменьшить шаг или выбрать другой навык."
+        : `Сохранённое действие «${openLoop.skillTitle}» всё ещё ждёт фактического результата.`;
+    return {
+      ...base,
+      planId: openLoop.planId,
+      skillTitle: openLoop.skillTitle,
+      entryMode: openLoop.entryMode,
+      safetyBlocked: false,
+      prompt: `Ты вернулся после перерыва в ${pause}. Ничего не сброшено. ${next} Продолжим без штрафа и без попытки догонять дни.`,
+      actionLabel: openLoop.actionLabel,
+    };
+  }
+
+  if (current?.result) {
+    const score =
+      current.helpfulness === null
+        ? "полезность не оценена"
+        : `полезность — ${current.helpfulness}/10`;
+    return {
+      ...base,
+      safetyBlocked: false,
+      prompt: `Ты вернулся после перерыва в ${pause}. Ничего не сброшено: для «${current.skill_title}» сохранено «${outcomeLabel(current.result)}», ${score}. Продолжим с текущей точки, без попытки догонять дни.`,
+      actionLabel: "Продолжить с текущей точки",
+    };
+  }
+
+  return {
+    ...base,
+    safetyBlocked: false,
+    prompt: `Ты вернулся после перерыва в ${pause}. Профиль и день программы сохранены. Начнём с текущей точки, без штрафа и без попытки догонять дни.`,
+    actionLabel: "Продолжить",
+  };
+}
+
 export function buildTrainerContinuity(
   plans: ContinuityPlan[],
   context: ContinuityContext = {},
@@ -251,6 +358,7 @@ export function buildTrainerContinuity(
     openLoop,
     day2CheckIn: buildDay2CheckIn(plans, context),
     days4to6: buildDays4to6(plans, context),
+    gapReturn: buildGapReturn(current, openLoop, context),
     nextCheckAt:
       current && current.result === null ? nextCheckAt(current.created_at) : null,
   };
