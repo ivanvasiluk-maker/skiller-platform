@@ -526,17 +526,6 @@ function selectSkill(input: RecommendationInput) {
   return { skillId: "grounding-543", changePoint: "возвращение внимания", reason: "Сначала восстанавливаем контакт с настоящим, затем выбираем действие по цели." };
 }
 
-const alternativeSkillIds: Record<string, string> = {
-  "micro-start": "distract-delay",
-  "distract-delay": "micro-start",
-  stop: "grounding-543",
-  "grounding-543": "stop",
-  "validate-first": "dear-man",
-  "dear-man": "validate-first",
-  "check-facts": "grounding-543",
-  "urge-surfing": "stop",
-};
-
 function decisionReason(
   reasonCode: OutcomeReasonCode | "safety_blocked",
   baseReason: string,
@@ -579,13 +568,9 @@ export async function recommendSkill(user: ChatGPTUser, input: RecommendationInp
   const policyDecision = decision.reasonCode;
   const reasonCode: OutcomeReasonCode | "safety_blocked" =
     policyDecision ?? "safety_blocked";
-  const selectedSkillId =
-    reasonCode === OUTCOME_REASON_CODES.replaceLowFit
-      ? alternativeSkillIds[baseSelection.skillId] ?? baseSelection.skillId
-      : baseSelection.skillId;
   const selection = {
     ...baseSelection,
-    skillId: selectedSkillId,
+    skillId: decision.selectedSkillId,
     reason: decisionReason(reasonCode, baseSelection.reason, Boolean(prior)),
   };
   await db.insert(situations).values({
@@ -619,7 +604,7 @@ export async function recommendSkill(user: ChatGPTUser, input: RecommendationInp
   const skill = await db.select().from(skills).where(and(eq(skills.id, selection.skillId), eq(skills.active, true))).get();
   if (!skill) throw new Error("Skill catalog is unavailable");
   let skillView = toSkillView(skill);
-  if (reasonCode === OUTCOME_REASON_CODES.resizeAfterFailed) {
+  if (decision.shouldResize) {
     skillView = {
       ...skillView,
       durationSeconds: Math.min(60, skillView.durationSeconds),

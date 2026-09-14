@@ -1,8 +1,20 @@
 import {
   decideNextStep,
   OUTCOME_POLICY_VERSION,
+  OUTCOME_REASON_CODES,
   type OutcomeReasonCode,
 } from "./outcome-policy";
+
+const alternativeSkillIds: Record<string, string> = {
+  "micro-start": "distract-delay",
+  "distract-delay": "micro-start",
+  stop: "grounding-543",
+  "grounding-543": "stop",
+  "validate-first": "dear-man",
+  "dear-man": "validate-first",
+  "check-facts": "grounding-543",
+  "urge-surfing": "stop",
+};
 
 export type CompatibleOutcome = {
   completed: boolean;
@@ -14,6 +26,8 @@ export type D1RecommendationDecision = {
   prior: CompatibleOutcome | null;
   reasonCode: OutcomeReasonCode | null;
   decisionVersion: string;
+  selectedSkillId: string;
+  shouldResize: boolean;
 };
 
 export async function readLatestCompatibleOutcome(
@@ -73,5 +87,10 @@ export async function decideRecommendationFromD1(input: {
     prior,
     reasonCode,
     decisionVersion: OUTCOME_POLICY_VERSION,
+    selectedSkillId:
+      reasonCode === OUTCOME_REASON_CODES.replaceLowFit
+        ? alternativeSkillIds[input.skillId] ?? input.skillId
+        : input.skillId,
+    shouldResize: reasonCode === OUTCOME_REASON_CODES.resizeAfterFailed,
   };
 }
