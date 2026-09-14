@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildTrainerContinuity,
+  missedDaysFromEngagement,
   type ContinuityPlan,
 } from "../lib/trainer-continuity.ts";
 
@@ -29,6 +30,7 @@ test("continuity is empty without saved plans", () => {
     openLoop: null,
     day2CheckIn: null,
     days4to6: null,
+    gapReturn: null,
     nextCheckAt: null,
   });
 });
@@ -222,4 +224,111 @@ test("the Days 4–6 card is not reused on Day 7", () => {
     safetyAllowsPractice: true,
   });
   assert.equal(result.days4to6, null);
+});
+
+test("a consecutive return does not create a gap card", () => {
+  const result = buildTrainerContinuity([plan()], {
+    day: 3,
+    startedAt,
+    engagedDays: [1, 2],
+  });
+  assert.equal(result.gapReturn, null);
+  assert.equal(missedDaysFromEngagement(3, [1, 2]), 0);
+});
+
+test("Day 4 after Day 1 reports two full missed days", () => {
+  const result = buildTrainerContinuity([
+    plan({ attempt_id: "attempt-1" }),
+  ], {
+    day: 4,
+    startedAt,
+    engagedDays: [1],
+    safetyAllowsPractice: true,
+  });
+  assert.equal(result.gapReturn?.currentDay, 4);
+  assert.equal(result.gapReturn?.lastEngagedDay, 1);
+  assert.equal(result.gapReturn?.missedDays, 2);
+  assert.match(result.gapReturn?.prompt ?? "", /перерыва в 2 дня/);
+});
+
+test("current-day engagement clears the gap card", () => {
+  const result = buildTrainerContinuity([plan()], {
+    day: 4,
+    startedAt,
+    engagedDays: [1, 4],
+  });
+  assert.equal(result.gapReturn, null);
+  assert.equal(missedDaysFromEngagement(4, [1, 4]), 0);
+});
+
+test("gap return preserves the exact unresolved plan and open loop", () => {
+  const result = buildTrainerContinuity([
+    plan({ id: "saved-plan", attempt_id: "saved-attempt" }),
+  ], {
+    day: 5,
+    startedAt,
+    engagedDays: [1, 2],
+    safetyAllowsPractice: true,
+  });
+  assert.equal(result.lastAction?.planId, "saved-plan");
+  assert.equal(result.openLoop?.planId, "saved-plan");
+  assert.equal(result.gapReturn?.planId, "saved-plan");
+  assert.equal(result.gapReturn?.actionLabel, "Отметить результат");
+  assert.match(result.gapReturn?.prompt ?? "", /Ничего не сброшено/);
+});
+
+test("completed progress remains visible after a gap", () => {
+  const result = buildTrainerContinuity([
+    plan({
+      result: "done",
+      helpfulness: 8,
+      attempt_id: "attempt-1",
+    }),
+  ], {
+    day: 5,
+    startedAt,
+    engagedDays: [1, 2],
+    safetyAllowsPractice: true,
+  });
+  assert.equal(result.gapReturn?.planId, "plan-1");
+  assert.match(
+    result.gapReturn?.prompt ?? "",
+    /получилось.*полезность — 8\/10/,
+  );
+  assert.match(result.gapReturn?.prompt ?? "", /без попытки догонять/);
+});
+
+test("safety takes priority in a gap return", () => {
+  const result = buildTrainerContinuity([
+    plan({ attempt_id: "attempt-1" }),
+  ], {
+    day: 4,
+    startedAt,
+    engagedDays: [1],
+    safetyAllowsPractice: false,
+  });
+  assert.equal(result.gapReturn?.safetyBlocked, true);
+  assert.equal(result.gapReturn?.actionLabel, "Проверить безопасность");
+  assert.match(result.gapReturn?.prompt ?? "", /Сначала спокойно проверим безопасность/);
+});
+
+test("gap return copy contains no blame or catch-up demand", () => {
+  const variants = [
+    buildTrainerContinuity([plan()], {
+      day: 4,
+      engagedDays: [1],
+      safetyAllowsPractice: true,
+    }).gapReturn?.prompt,
+    buildTrainerContinuity([
+      plan({ result: "failed", helpfulness: 4, attempt_id: "attempt-1" }),
+    ], {
+      day: 4,
+      engagedDays: [1],
+      safetyAllowsPractice: true,
+    }).gapReturn?.prompt,
+  ].join(" ");
+  assert.doesNotMatch(
+    variants,
+    /виноват|ленив|надо было|почему не|обязан|наверстать/i,
+  );
 });
