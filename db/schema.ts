@@ -50,6 +50,8 @@ export const situations = sqliteTable(
     importantGoal: text("important_goal").notNull().default(""),
     changePoint: text("change_point").notNull().default("before_action"),
     recommendationReason: text("recommendation_reason").notNull().default(""),
+    decisionReasonCode: text("decision_reason_code").notNull().default("first_try"),
+    decisionVersion: text("decision_version").notNull().default("outcome-policy-v1"),
     chainJson: text("chain_json").notNull().default(""),
     aiAnalysisJson: text("ai_analysis_json").notNull().default(""),
     intensity: integer("intensity").notNull(),

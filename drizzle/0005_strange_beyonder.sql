@@ -1,0 +1,2 @@
+ALTER TABLE `situations` ADD `decision_reason_code` text DEFAULT 'first_try' NOT NULL;--> statement-breakpoint
+ALTER TABLE `situations` ADD `decision_version` text DEFAULT 'outcome-policy-v1' NOT NULL;

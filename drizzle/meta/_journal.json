@@ -36,6 +36,13 @@
       "when": 1789240901344,
       "tag": "0004_high_ben_parker",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1789361520288,
+      "tag": "0005_strange_beyonder",
+      "breakpoints": true
     }
   ]
 }

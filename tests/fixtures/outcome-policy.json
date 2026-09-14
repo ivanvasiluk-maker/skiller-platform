@@ -1,0 +1,90 @@
+[
+  {
+    "name": "safety blocks a helpful history",
+    "facts": {
+      "safety_allows_practice": false,
+      "has_compatible_evidence": true,
+      "completed": true,
+      "helpfulness": 10,
+      "avoidance_increased": false
+    },
+    "expected": null
+  },
+  {
+    "name": "no compatible history is a first try",
+    "facts": {
+      "safety_allows_practice": true,
+      "has_compatible_evidence": false,
+      "completed": null,
+      "helpfulness": null,
+      "avoidance_increased": false
+    },
+    "expected": "first_try"
+  },
+  {
+    "name": "helpful threshold repeats",
+    "facts": {
+      "safety_allows_practice": true,
+      "has_compatible_evidence": true,
+      "completed": true,
+      "helpfulness": 6,
+      "avoidance_increased": false
+    },
+    "expected": "repeat_helpful"
+  },
+  {
+    "name": "failed attempt is resized",
+    "facts": {
+      "safety_allows_practice": true,
+      "has_compatible_evidence": true,
+      "completed": false,
+      "helpfulness": 5,
+      "avoidance_increased": false
+    },
+    "expected": "resize_after_failed"
+  },
+  {
+    "name": "abandoned attempt is not completion",
+    "facts": {
+      "safety_allows_practice": true,
+      "has_compatible_evidence": true,
+      "completed": null,
+      "helpfulness": null,
+      "avoidance_increased": false
+    },
+    "expected": "resize_after_failed"
+  },
+  {
+    "name": "low helpfulness replaces",
+    "facts": {
+      "safety_allows_practice": true,
+      "has_compatible_evidence": true,
+      "completed": true,
+      "helpfulness": 3,
+      "avoidance_increased": false
+    },
+    "expected": "replace_low_fit"
+  },
+  {
+    "name": "avoidance prevents repetition",
+    "facts": {
+      "safety_allows_practice": true,
+      "has_compatible_evidence": true,
+      "completed": true,
+      "helpfulness": 9,
+      "avoidance_increased": true
+    },
+    "expected": "replace_low_fit"
+  },
+  {
+    "name": "midrange evidence does not trigger personalized repetition",
+    "facts": {
+      "safety_allows_practice": true,
+      "has_compatible_evidence": true,
+      "completed": true,
+      "helpfulness": 5,
+      "avoidance_increased": false
+    },
+    "expected": "first_try"
+  }
+]
