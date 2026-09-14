@@ -51,7 +51,19 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
     db.prepare("SELECT * FROM trainer_plans WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100").bind(user.userId).all<TrainerPlan>(),
     db.prepare("SELECT DISTINCT day_index FROM pilot_events WHERE user_id=? AND event_name='engaged_return' ORDER BY day_index").bind(profile.pseudonym).all<{ day_index: number }>(),
   ]);
-  return { profile, day: dayIndex(profile.created_at), messages: messages.results, plans: plans.results, recap: buildRecap(plans.results), engagedDays: days.results.map(d => d.day_index), continuity: buildTrainerContinuity(plans.results) };
+  const day = dayIndex(profile.created_at);
+  return {
+    profile,
+    day,
+    messages: messages.results,
+    plans: plans.results,
+    recap: buildRecap(plans.results),
+    engagedDays: days.results.map(d => d.day_index),
+    continuity: buildTrainerContinuity(plans.results, {
+      day,
+      startedAt: profile.created_at,
+    }),
+  };
 }
 async function event(profile: TrainerProfile, session: string, name: string, key: string, payload: Record<string, string | number | boolean | null> = {}) {
   await getRawDb().prepare("INSERT OR IGNORE INTO pilot_events (id,user_id,session_id,trainer_id,day_index,event_name,payload_json,product_version,created_at) VALUES (?,?,?,?,?,?,?,?,?)")

@@ -5,6 +5,8 @@ import {
   type ContinuityPlan,
 } from "../lib/trainer-continuity.ts";
 
+const startedAt = "2026-09-14T08:00:00.000Z";
+
 function plan(
   overrides: Partial<ContinuityPlan> = {},
 ): ContinuityPlan {
@@ -25,6 +27,7 @@ test("continuity is empty without saved plans", () => {
     lastAction: null,
     lastOutcome: null,
     openLoop: null,
+    day2CheckIn: null,
     nextCheckAt: null,
   });
 });
@@ -67,4 +70,63 @@ test("successful latest action does not create a false open loop", () => {
   ]);
   assert.equal(result.openLoop, null);
   assert.equal(result.lastOutcome?.result, "done");
+});
+
+test("Day 1 does not show a Day 2 check-in", () => {
+  const result = buildTrainerContinuity([plan()], {
+    day: 1,
+    startedAt,
+  });
+  assert.equal(result.day2CheckIn, null);
+});
+
+test("Day 2 asks for the unresolved Day 1 action result", () => {
+  const result = buildTrainerContinuity([plan()], {
+    day: 2,
+    startedAt,
+  });
+  assert.equal(result.day2CheckIn?.skillTitle, "Микростарт");
+  assert.equal(result.day2CheckIn?.result, null);
+  assert.match(
+    result.day2CheckIn?.prompt ?? "",
+    /Микростарт.*сделал, не получилось или сделал больше/,
+  );
+  assert.equal(result.day2CheckIn?.actionLabel, "Отметить результат");
+});
+
+test("Day 2 states the saved Day 1 outcome without inventing a cause", () => {
+  const result = buildTrainerContinuity([
+    plan({ result: "done", helpfulness: 8, attempt_id: "attempt-1" }),
+  ], {
+    day: 2,
+    startedAt,
+  });
+  assert.equal(result.day2CheckIn?.result, "done");
+  assert.match(
+    result.day2CheckIn?.prompt ?? "",
+    /Микростарт.*получилось, полезность — 8\/10/,
+  );
+  assert.doesNotMatch(result.day2CheckIn?.prompt ?? "", /потому что|причин/);
+});
+
+test("Day 2 keeps the Day 1 action after a newer Day 2 plan exists", () => {
+  const result = buildTrainerContinuity([
+    plan({
+      id: "day-2-plan",
+      skill_title: "Заземление",
+      created_at: "2026-09-15T09:00:00.000Z",
+    }),
+    plan({
+      id: "day-1-plan",
+      skill_title: "Первый шаг",
+      result: "more",
+      helpfulness: 7,
+    }),
+  ], {
+    day: 2,
+    startedAt,
+  });
+  assert.equal(result.day2CheckIn?.planId, "day-1-plan");
+  assert.equal(result.day2CheckIn?.skillTitle, "Первый шаг");
+  assert.match(result.day2CheckIn?.prompt ?? "", /сделал больше/);
 });
