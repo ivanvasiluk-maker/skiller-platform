@@ -19,10 +19,12 @@ import {
   type OutcomeReasonCode,
 } from "@/lib/outcome-policy";
 import { decideRecommendationFromD1 } from "@/lib/outcome-history";
+import { skillCardVersion } from "@/lib/skill-card-versions";
 
 export type SkillStep = { title: string; copy: string };
 export type SkillView = {
   id: string;
+  version: string;
   title: string;
   approach: string;
   track: string;
@@ -295,7 +297,11 @@ async function createStorage() {
 }
 
 function toSkillView(row: typeof skills.$inferSelect): SkillView {
-  return { ...row, steps: JSON.parse(row.stepsJson) as SkillStep[] };
+  return {
+    ...row,
+    version: skillCardVersion(row.id),
+    steps: JSON.parse(row.stepsJson) as SkillStep[],
+  };
 }
 
 export async function loadDashboard(user: ChatGPTUser): Promise<DashboardData> {

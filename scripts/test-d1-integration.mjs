@@ -116,6 +116,15 @@ async function runSettingsContinuity(baseUrl) {
   return body;
 }
 
+async function runEventVersioning(baseUrl) {
+  const response = await fetch(`${baseUrl}/event-versioning`, {
+    method: "POST",
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  return body;
+}
+
 async function runIdempotentRequest(baseUrl, requestId) {
   const response = await fetch(`${baseUrl}/idempotency`, {
     method: "POST",
@@ -282,6 +291,9 @@ try {
           from_interaction_mode: "support",
           to_interaction_mode: "direct",
           final_trainer_id: "beck",
+          product_version: "frozen-mvp-1.0",
+          character_version: "1.0",
+          skill_card_version: null,
         },
       },
       {
@@ -292,10 +304,35 @@ try {
           from_trainer_id: "marsha",
           to_trainer_id: "beck",
           final_interaction_mode: "direct",
+          product_version: "frozen-mvp-1.0",
+          character_version: "1.0",
+          skill_card_version: null,
         },
       },
     ],
   });
+
+  assert.deepEqual(await runEventVersioning(baseUrl), [
+    {
+      name: "action_started",
+      productVersionColumn: "frozen-mvp-1.0",
+      payload: {
+        skill_id: "micro-start",
+        product_version: "frozen-mvp-1.0",
+        character_version: "1.0",
+        skill_card_version: "1.0",
+      },
+    },
+    {
+      name: "app_open",
+      productVersionColumn: "frozen-mvp-1.0",
+      payload: {
+        product_version: "frozen-mvp-1.0",
+        character_version: "1.0",
+        skill_card_version: null,
+      },
+    },
+  ]);
 
   const requestId = "00000000-0000-4000-8000-000000000043";
   const firstRequest = await runIdempotentRequest(baseUrl, requestId);
@@ -308,7 +345,7 @@ try {
   assert.deepEqual(await countResponse.json(), { mutationCount: 1 });
 
   console.log(
-    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, settings continuity, and duplicate request mutation.",
+    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, and duplicate request mutation.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");

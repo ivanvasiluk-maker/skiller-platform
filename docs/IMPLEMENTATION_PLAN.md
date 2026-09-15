@@ -68,7 +68,7 @@
 - [ ] Добавить scripts `typecheck`, `test:core`, `test:integration`, `test:e2e`, `verify` в `package.json`.
 - [ ] Настроить CI: install → lint → typecheck → unit/integration → build.
 - [x] Создать отдельную тестовую D1-базу и тестовые bindings.
-- [ ] Зафиксировать `PRODUCT_VERSION`, `CHARACTER_VERSION`, версии skill cards в событиях.
+- [x] Зафиксировать `PRODUCT_VERSION`, `CHARACTER_VERSION`, версии skill cards во всех обязательных событиях (Round 0.1 Event Versions).
 - [x] Добавить seed/reset только для тестовой среды.
 - [ ] Описать обязательные env/bindings без публикации секретов.
 

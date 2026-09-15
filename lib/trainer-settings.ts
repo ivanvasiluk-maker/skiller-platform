@@ -1,4 +1,5 @@
-import type { InteractionMode, TrainerId } from "./trainers";
+import type { InteractionMode, TrainerId } from "./trainers.ts";
+import { preparePilotEvent } from "./pilot-events.ts";
 
 export type TrainerSettingsProfile = {
   user_id: string;
@@ -64,7 +65,6 @@ export async function persistTrainerSettings(input: {
   sessionId: string;
   requestId: string;
   dayIndex: number;
-  productVersion: string;
   now?: string;
 }) {
   const change = buildTrainerSettingsChange(input.profile, input);
@@ -78,21 +78,17 @@ export async function persistTrainerSettings(input: {
       )
       .bind(change.trainerId, change.interactionMode, input.profile.user_id),
     ...change.events.map((event) =>
-      input.db
-        .prepare(
-          "INSERT OR IGNORE INTO pilot_events (id,user_id,session_id,trainer_id,day_index,event_name,payload_json,product_version,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        )
-        .bind(
-          `${input.profile.pseudonym}:${event.name}:${input.requestId}`,
-          input.profile.pseudonym,
-          input.sessionId,
-          event.trainerId,
-          input.dayIndex,
-          event.name,
-          JSON.stringify(event.payload),
-          input.productVersion,
-          now,
-        ),
+      preparePilotEvent(input.db, {
+        id: `${input.profile.pseudonym}:${event.name}:${input.requestId}`,
+        userId: input.profile.pseudonym,
+        sessionId: input.sessionId,
+        trainerId: event.trainerId,
+        dayIndex: input.dayIndex,
+        eventName: event.name,
+        payload: event.payload,
+        skillCardVersion: null,
+        createdAt: now,
+      }),
     ),
   ];
   await input.db.batch(statements);
