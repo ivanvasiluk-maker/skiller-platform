@@ -18,6 +18,7 @@ function plan(
     attempt_id: null,
     result: null,
     helpfulness: null,
+    decision_reason_code: "first_try",
     created_at: "2026-09-14T10:00:00.000Z",
     ...overrides,
   };
@@ -136,7 +137,7 @@ test("Day 2 keeps the Day 1 action after a newer Day 2 plan exists", () => {
 
 test("Days 4–6 repeat a helpful completion only after a new context check", () => {
   const result = buildTrainerContinuity([
-    plan({ result: "done", helpfulness: 8, attempt_id: "attempt-1" }),
+    plan({ result: "done", helpfulness: 8, attempt_id: "attempt-1", decision_reason_code: "repeat_helpful" }),
   ], {
     day: 4,
     startedAt,
@@ -146,11 +147,12 @@ test("Days 4–6 repeat a helpful completion only after a new context check", ()
   assert.equal(result.days4to6?.reasonCode, "repeat_helpful");
   assert.match(result.days4to6?.prompt ?? "", /получилось, полезность — 8\/10/);
   assert.match(result.days4to6?.prompt ?? "", /безопасность и совместимость/);
+  assert.match(result.days4to6?.reasonExplanation ?? "", /ещё раз проверить/);
 });
 
 test("Days 4–6 resize a failed action without low-fit evidence", () => {
   const result = buildTrainerContinuity([
-    plan({ result: "failed", helpfulness: 5, attempt_id: "attempt-1" }),
+    plan({ result: "failed", helpfulness: 5, attempt_id: "attempt-1", decision_reason_code: "resize_after_failed" }),
   ], {
     day: 5,
     startedAt,
@@ -158,11 +160,12 @@ test("Days 4–6 resize a failed action without low-fit evidence", () => {
   });
   assert.equal(result.days4to6?.kind, "resize");
   assert.equal(result.days4to6?.reasonCode, "resize_after_failed");
+  assert.match(result.days4to6?.reasonExplanation ?? "", /уменьшить шаг/);
 });
 
 test("Days 4–6 replace low-fit evidence instead of repeating it", () => {
   const result = buildTrainerContinuity([
-    plan({ result: "done", helpfulness: 2, attempt_id: "attempt-1" }),
+    plan({ result: "done", helpfulness: 2, attempt_id: "attempt-1", decision_reason_code: "replace_low_fit" }),
   ], {
     day: 6,
     startedAt,
@@ -171,6 +174,7 @@ test("Days 4–6 replace low-fit evidence instead of repeating it", () => {
   assert.equal(result.days4to6?.kind, "replace");
   assert.equal(result.days4to6?.reasonCode, "replace_low_fit");
   assert.match(result.days4to6?.prompt ?? "", /Автоматически повторять.*не будем/);
+  assert.match(result.days4to6?.reasonExplanation ?? "", /другой навык/);
 });
 
 test("Days 4–6 do not automatically repeat neutral evidence", () => {
@@ -184,6 +188,26 @@ test("Days 4–6 do not automatically repeat neutral evidence", () => {
   assert.equal(result.days4to6?.kind, "new");
   assert.equal(result.days4to6?.reasonCode, "first_try");
   assert.match(result.days4to6?.prompt ?? "", /недостаточно для автоматического повтора/);
+  assert.match(result.days4to6?.reasonExplanation ?? "", /новая проверка/);
+});
+
+test("Days 4–6 use the persisted transfer reason even when outcome fields conflict", () => {
+  const result = buildTrainerContinuity([
+    plan({
+      result: "done",
+      helpfulness: 2,
+      attempt_id: "attempt-1",
+      decision_reason_code: "transfer_helpful",
+    }),
+  ], {
+    day: 5,
+    startedAt,
+    safetyAllowsPractice: true,
+  });
+  assert.equal(result.days4to6?.kind, "transfer");
+  assert.equal(result.days4to6?.reasonCode, "transfer_helpful");
+  assert.match(result.days4to6?.reasonExplanation ?? "", /новый совместимый контекст/);
+  assert.equal(result.days4to6?.actionLabel, "Проверить в новом контексте");
 });
 
 test("an unresolved latest action keeps the open loop instead of a Days 4–6 card", () => {
@@ -206,7 +230,7 @@ test("an unresolved latest action keeps the open loop instead of a Days 4–6 ca
 
 test("safety blocks the Days 4–6 return card", () => {
   const result = buildTrainerContinuity([
-    plan({ result: "done", helpfulness: 8, attempt_id: "attempt-1" }),
+    plan({ result: "done", helpfulness: 8, attempt_id: "attempt-1", decision_reason_code: "repeat_helpful" }),
   ], {
     day: 4,
     startedAt,
