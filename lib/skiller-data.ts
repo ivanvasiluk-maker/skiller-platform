@@ -688,7 +688,19 @@ export async function completeAttempt(user: ChatGPTUser, input: { attemptId: str
     .where(and(eq(skillAttempts.id, input.attemptId), eq(skillAttempts.userId, user.userId)))
     .get();
   if (!attempt) throw new Error("Attempt not found");
-  if (attempt.status === "completed") return loadDashboard(user);
+  const existingOutcome = await db
+    .select({ id: outcomes.id })
+    .from(outcomes)
+    .where(
+      and(
+        eq(outcomes.attemptId, attempt.id),
+        eq(outcomes.userId, user.userId),
+      ),
+    )
+    .get();
+  if (existingOutcome || attempt.status === "completed") {
+    return loadDashboard(user);
+  }
 
   const completedAt = new Date().toISOString();
   const relief = Math.max(-5, Math.min(5, input.reliefDelta));

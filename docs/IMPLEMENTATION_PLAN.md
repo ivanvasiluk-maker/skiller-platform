@@ -101,8 +101,8 @@
 - [x] Добавить reason codes: `repeat_helpful`, `transfer_helpful`, `resize_after_failed`, `replace_low_fit`, `first_try` (Round 2.4b).
 - [x] Сохранять reason code и version решения в situation/plan/event.
 - [x] Не учитывать abandoned attempt как completion.
-- [ ] Сделать повторный outcome идемпотентным.
-- [ ] Добавить интеграционные тесты successful repeat, failed replacement, low helpfulness, avoidance и safety override.
+- [x] Сделать повторный outcome идемпотентным (Round 2.8).
+- [x] Добавить интеграционные тесты successful repeat, failed replacement, low helpfulness, avoidance и safety override (Rounds 1.2–2.8).
 
 ### Приемка
 
@@ -196,7 +196,7 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 
 - [ ] onboarding и сохранение выбора тренера;
 - [ ] done/more/failed и раздельные completion/helpfulness;
-- [ ] duplicate request и повторный outcome;
+- [x] duplicate request и повторный outcome (D1 integration, Rounds 1.2 и 2.8);
 - [ ] safety escalation и возврат из safety flow;
 - [ ] repeat/transfer/resize/replacement;
 - [x] смена персонажа и режима без потери данных (D1 integration, Round 2.7);

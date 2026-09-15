@@ -8,6 +8,7 @@ import {
 } from "../lib/request-idempotency";
 import { persistTrainerSettings } from "../lib/trainer-settings";
 import { dayIndex } from "../lib/trainers";
+import { completeAttempt } from "../lib/skiller-data";
 
 type Env = { DB: D1Database };
 const scenarios = [
@@ -15,6 +16,7 @@ const scenarios = [
   "repeat_helpful",
   "resize_after_failed",
   "replace_low_fit",
+  "avoidance_replace",
   "transfer_helpful",
   "safety_override",
 ] as const;
@@ -108,6 +110,12 @@ async function runScenario(
       helpfulness: 2,
       avoidance: false,
     });
+  } else if (scenario === "avoidance_replace") {
+    await seedOutcome(db, userId, skillId, kind, {
+      completed: true,
+      helpfulness: 8,
+      avoidance: true,
+    });
   }
 
   const decision = await decideRecommendationFromD1({
@@ -122,6 +130,84 @@ async function runScenario(
     .bind(userId)
     .first<{ count: number }>();
   return { ...decision, storedOutcomeCount: Number(stored?.count ?? 0) };
+}
+
+async function runOutcomeIdempotency(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const userId = "outcome-idempotency-" + suffix;
+  const situationId = "outcome-situation-" + suffix;
+  const attemptId = "outcome-attempt-" + suffix;
+  const user = {
+    userId,
+    displayName: "Outcome Idempotency",
+    email: userId + "@example.invalid",
+    fullName: null,
+  };
+
+  await db.batch([
+    db.prepare("INSERT INTO users (id,email,display_name) VALUES (?,?,?)")
+      .bind(userId, user.email, user.displayName),
+    db.prepare(
+      "INSERT OR IGNORE INTO skills (id,title,approach,track,description,why,steps_json,duration_seconds) VALUES (?,?,?,?,?,?,?,?)",
+    ).bind("micro-start", "Микростарт", "behavioral", "action", "Первый маленький шаг", "Снижает порог входа", "[]", 60),
+    db.prepare(
+      "INSERT INTO situations (id,user_id,kind,intensity,safety_status) VALUES (?,?,?,?,?)",
+    ).bind(situationId, userId, "stuck", 6, "self-guided"),
+    db.prepare(
+      "INSERT INTO skill_attempts (id,user_id,situation_id,skill_id,mode,status) VALUES (?,?,?,?,?,?)",
+    ).bind(attemptId, userId, situationId, "micro-start", "guided", "started"),
+  ]);
+
+  const outcome = {
+    attemptId,
+    completed: false,
+    reliefDelta: 0,
+    goalProgress: 0,
+    helpfulness: 4,
+    avoidance: false,
+  };
+  await completeAttempt(user, outcome);
+  await completeAttempt(user, outcome);
+
+  const outcomeCount = await db.prepare(
+    "SELECT count(*) AS count FROM outcomes WHERE attempt_id=? AND user_id=?",
+  ).bind(attemptId, userId).first<{ count: number }>();
+  const storedOutcome = await db.prepare(
+    "SELECT completed,helpfulness,avoidance FROM outcomes WHERE attempt_id=? AND user_id=?",
+  ).bind(attemptId, userId).first<{
+    completed: number;
+    helpfulness: number;
+    avoidance: number;
+  }>();
+  const attempt = await db.prepare(
+    "SELECT status FROM skill_attempts WHERE id=? AND user_id=?",
+  ).bind(attemptId, userId).first<{ status: string }>();
+  const evidence = await db.prepare(
+    "SELECT attempts,completions,helpful_sum,goal_sum,avoidance_count FROM personal_skill_evidence WHERE user_id=? AND skill_id=?",
+  ).bind(userId, "micro-start").first<{
+    attempts: number;
+    completions: number;
+    helpful_sum: number;
+    goal_sum: number;
+    avoidance_count: number;
+  }>();
+
+  return {
+    outcomeCount: Number(outcomeCount?.count),
+    outcome: {
+      completed: Number(storedOutcome?.completed),
+      helpfulness: Number(storedOutcome?.helpfulness),
+      avoidance: Number(storedOutcome?.avoidance),
+    },
+    attemptStatus: attempt?.status,
+    evidence: {
+      attempts: Number(evidence?.attempts),
+      completions: Number(evidence?.completions),
+      helpfulSum: Number(evidence?.helpful_sum),
+      goalSum: Number(evidence?.goal_sum),
+      avoidanceCount: Number(evidence?.avoidance_count),
+    },
+  };
 }
 
 async function runSettingsContinuity(db: D1Database) {
@@ -295,6 +381,9 @@ const worker: ExportedHandler<Env> = {
     if (request.method === "GET" && url.pathname === "/health") {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
       return Response.json(row);
+    }
+    if (request.method === "POST" && url.pathname === "/outcome-idempotency") {
+      return Response.json(await runOutcomeIdempotency(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/settings-continuity") {
       return Response.json(await runSettingsContinuity(env.DB));
