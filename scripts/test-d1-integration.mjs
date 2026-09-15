@@ -98,6 +98,15 @@ async function runScenario(baseUrl, scenario) {
   return body;
 }
 
+async function runOutcomeIdempotency(baseUrl) {
+  const response = await fetch(`${baseUrl}/outcome-idempotency`, {
+    method: "POST",
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  return body;
+}
+
 async function runSettingsContinuity(baseUrl) {
   const response = await fetch(`${baseUrl}/settings-continuity`, {
     method: "POST",
@@ -204,6 +213,17 @@ try {
     storedOutcomeCount: 1,
   });
 
+  const avoidanceReplace = await runScenario(baseUrl, "avoidance_replace");
+  assert.deepEqual(avoidanceReplace, {
+    prior: { completed: true, helpfulness: 8, avoidance: true },
+    evidenceContextKind: "stuck",
+    reasonCode: "replace_low_fit",
+    decisionVersion: "outcome-policy-v2",
+    selectedSkillId: "distract-delay",
+    shouldResize: false,
+    storedOutcomeCount: 1,
+  });
+
   const transferHelpful = await runScenario(baseUrl, "transfer_helpful");
   assert.deepEqual(transferHelpful, {
     prior: { completed: true, helpfulness: 7, avoidance: false },
@@ -224,6 +244,20 @@ try {
     selectedSkillId: "micro-start",
     shouldResize: false,
     storedOutcomeCount: 1,
+  });
+
+  const repeatedOutcome = await runOutcomeIdempotency(baseUrl);
+  assert.deepEqual(repeatedOutcome, {
+    outcomeCount: 1,
+    outcome: { completed: 0, helpfulness: 4, avoidance: 0 },
+    attemptStatus: "attempted",
+    evidence: {
+      attempts: 1,
+      completions: 0,
+      helpfulSum: 4,
+      goalSum: 0,
+      avoidanceCount: 0,
+    },
   });
 
   const settingsContinuity = await runSettingsContinuity(baseUrl);
@@ -274,7 +308,7 @@ try {
   assert.deepEqual(await countResponse.json(), { mutationCount: 1 });
 
   console.log(
-    "D1 integration passed: six recommendation branches, settings continuity across trainer/mode changes, and duplicate request mutation.",
+    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, settings continuity, and duplicate request mutation.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");
