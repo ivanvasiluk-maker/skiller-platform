@@ -126,7 +126,7 @@
   - [x] Transfer между контекстами: отдельный `transfer_helpful` и доказуемая совместимость (Round 2.4b).
 - [x] Day 7: недельный recap, рабочая гипотеза, ограничения уверенности и следующий эксперимент (Round 2.5).
 - [x] Возврат после пропуска: без стыда, сброса дня и потери open-loop/progress (Round 2.6).
-- [ ] Смена trainer/mode: сохранять plans, outcomes, events и day state.
+- [x] Смена trainer/mode: сохранять plans, outcomes, events и day state (Round 2.7).
 - [x] Добавить overdue/open-loop карточку на главный экран (Round 2.1).
 
 ### Приемка
@@ -199,7 +199,7 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 - [ ] duplicate request и повторный outcome;
 - [ ] safety escalation и возврат из safety flow;
 - [ ] repeat/transfer/resize/replacement;
-- [ ] смена персонажа и режима без потери данных;
+- [x] смена персонажа и режима без потери данных (D1 integration, Round 2.7);
 - [ ] analytics event completeness;
 - [ ] Sheets retry без влияния на API response;
 - [ ] AI timeout, malformed output и deterministic fallback.

@@ -5,6 +5,7 @@ import type { ChatGPTUser } from "@/app/chatgpt-auth";
 import { ensureUser, recommendSkill, startAttempt, completeAttempt, completeOnboarding, loadDashboard, type SkillView } from "@/lib/skiller-data";
 import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-idempotency";
 import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-continuity";
+import { persistTrainerSettings } from "@/lib/trainer-settings";
 import { trainers, interactionModes, PRODUCT_VERSION, CHARACTER_VERSION, dayIndex, requiresSafetyRoute, safetyMessage, buildRecap, type TrainerId, type InteractionMode } from "@/lib/trainers";
 
 export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
@@ -120,11 +121,16 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
     if (!profile) throw new Error("Сначала познакомьтесь с тренером.");
     const key = body.requestId;
     if (body.action === "settings") {
-      const trainer = body.trainerId ?? profile.trainer_id;
-      const mode = body.interactionMode ?? profile.interaction_mode;
-      await db.prepare("UPDATE trainer_profiles SET trainer_id=?,interaction_mode=? WHERE user_id=?").bind(trainer, mode, user.userId).run();
-      if (trainer !== profile.trainer_id) await event({ ...profile, trainer_id: trainer }, body.sessionId, "trainer_changed", key);
-      if (mode !== profile.interaction_mode) await event(profile, body.sessionId, "interaction_mode_changed", key);
+      await persistTrainerSettings({
+        db,
+        profile,
+        trainerId: body.trainerId,
+        interactionMode: body.interactionMode,
+        sessionId: body.sessionId,
+        requestId: key,
+        dayIndex: dayIndex(profile.created_at),
+        productVersion: PRODUCT_VERSION,
+      });
       profile = (await profileFor(user.userId))!;
     }
     if (body.action === "open") await event(profile, body.sessionId, "app_open", body.sessionId);
