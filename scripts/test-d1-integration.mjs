@@ -98,6 +98,15 @@ async function runScenario(baseUrl, scenario) {
   return body;
 }
 
+async function runSettingsContinuity(baseUrl) {
+  const response = await fetch(`${baseUrl}/settings-continuity`, {
+    method: "POST",
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  return body;
+}
+
 async function runIdempotentRequest(baseUrl, requestId) {
   const response = await fetch(`${baseUrl}/idempotency`, {
     method: "POST",
@@ -217,6 +226,43 @@ try {
     storedOutcomeCount: 1,
   });
 
+  const settingsContinuity = await runSettingsContinuity(baseUrl);
+  assert.deepEqual(settingsContinuity, {
+    profile: { trainerId: "beck", interactionMode: "direct" },
+    dayBefore: 4,
+    dayAfter: 4,
+    plan: { idPreserved: true, result: "done", helpfulness: 8 },
+    outcome: { completed: 1, helpfulness: 8, avoidance: 0 },
+    historicalEvent: {
+      idPreserved: true,
+      trainerId: "marsha",
+      dayIndex: 2,
+      payload: { source: "before-settings" },
+    },
+    changeEvents: [
+      {
+        trainerId: "beck",
+        dayIndex: 4,
+        name: "interaction_mode_changed",
+        payload: {
+          from_interaction_mode: "support",
+          to_interaction_mode: "direct",
+          final_trainer_id: "beck",
+        },
+      },
+      {
+        trainerId: "beck",
+        dayIndex: 4,
+        name: "trainer_changed",
+        payload: {
+          from_trainer_id: "marsha",
+          to_trainer_id: "beck",
+          final_interaction_mode: "direct",
+        },
+      },
+    ],
+  });
+
   const requestId = "00000000-0000-4000-8000-000000000043";
   const firstRequest = await runIdempotentRequest(baseUrl, requestId);
   const repeatedRequest = await runIdempotentRequest(baseUrl, requestId);
@@ -228,7 +274,7 @@ try {
   assert.deepEqual(await countResponse.json(), { mutationCount: 1 });
 
   console.log(
-    "D1 recommendation integration passed: six recommendation branches use migrated history, including cross-context transfer; duplicate request mutates once.",
+    "D1 integration passed: six recommendation branches, settings continuity across trainer/mode changes, and duplicate request mutation.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");
