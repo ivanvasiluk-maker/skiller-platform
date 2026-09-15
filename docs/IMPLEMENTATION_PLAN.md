@@ -100,6 +100,7 @@
 - [x] Перед подбором читать последний outcome для совместимого контекста и текущего eligible-навыка.
 - [x] Добавить reason codes: `repeat_helpful`, `transfer_helpful`, `resize_after_failed`, `replace_low_fit`, `first_try` (Round 2.4b).
 - [x] Сохранять reason code и version решения в situation/plan/event.
+- [x] Объяснять следующий шаг в UI из сохранённого reason code без повторного вывода из outcome-полей (Round 2.9).
 - [x] Не учитывать abandoned attempt как completion.
 - [x] Сделать повторный outcome идемпотентным (Round 2.8).
 - [x] Добавить интеграционные тесты successful repeat, failed replacement, low helpfulness, avoidance и safety override (Rounds 1.2–2.8).
