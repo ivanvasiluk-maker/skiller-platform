@@ -9,6 +9,8 @@ import {
 import { persistTrainerSettings } from "../lib/trainer-settings";
 import { dayIndex } from "../lib/trainers";
 import { completeAttempt } from "../lib/skiller-data";
+import { preparePilotEvent } from "../lib/pilot-events";
+import { skillCardVersion } from "../lib/skill-card-versions";
 
 type Env = { DB: D1Database };
 const scenarios = [
@@ -271,7 +273,6 @@ async function runSettingsContinuity(db: D1Database) {
     sessionId: "settings-session-" + suffix,
     requestId: suffix,
     dayIndex: beforeDay,
-    productVersion: "test-v1",
     now: new Date().toISOString(),
   });
 
@@ -337,6 +338,51 @@ async function runSettingsContinuity(db: D1Database) {
   };
 }
 
+async function runEventVersioning(db: D1Database) {
+  await db.prepare(
+    "CREATE TABLE IF NOT EXISTS pilot_events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL, trainer_id TEXT NOT NULL, day_index INTEGER NOT NULL, event_name TEXT NOT NULL, payload_json TEXT NOT NULL, product_version TEXT NOT NULL, created_at TEXT NOT NULL, exported_at TEXT)",
+  ).run();
+  const suffix = crypto.randomUUID();
+  const userId = `version-user-${suffix}`;
+  const createdAt = new Date().toISOString();
+  await db.batch([
+    preparePilotEvent(db, {
+      id: `version-app-open-${suffix}`,
+      userId,
+      sessionId: `version-session-${suffix}`,
+      trainerId: "marsha",
+      dayIndex: 1,
+      eventName: "app_open",
+      payload: {},
+      skillCardVersion: null,
+      createdAt,
+    }),
+    preparePilotEvent(db, {
+      id: `version-action-started-${suffix}`,
+      userId,
+      sessionId: `version-session-${suffix}`,
+      trainerId: "marsha",
+      dayIndex: 1,
+      eventName: "action_started",
+      payload: { skill_id: "micro-start" },
+      skillCardVersion: skillCardVersion("micro-start"),
+      createdAt,
+    }),
+  ]);
+  const rows = await db.prepare(
+    "SELECT event_name,payload_json,product_version FROM pilot_events WHERE user_id=? ORDER BY event_name",
+  ).bind(userId).all<{
+    event_name: string;
+    payload_json: string;
+    product_version: string;
+  }>();
+  return rows.results.map((row) => ({
+    name: row.event_name,
+    productVersionColumn: row.product_version,
+    payload: JSON.parse(row.payload_json),
+  }));
+}
+
 type IdempotencyResponse = { requestId: string; mutationCount: number };
 
 async function ensureIdempotencyStorage(db: D1Database) {
@@ -387,6 +433,9 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/settings-continuity") {
       return Response.json(await runSettingsContinuity(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/event-versioning") {
+      return Response.json(await runEventVersioning(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/idempotency") {
       const body = await request.json<{ requestId?: string }>();

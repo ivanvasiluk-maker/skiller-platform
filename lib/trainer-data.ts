@@ -6,8 +6,10 @@ import { ensureUser, recommendSkill, startAttempt, completeAttempt, completeOnbo
 import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-idempotency";
 import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-continuity";
 import type { OutcomeReasonCode } from "@/lib/outcome-policy";
+import { preparePilotEvent, type PilotEventPayload } from "@/lib/pilot-events";
+import { skillCardVersion } from "@/lib/skill-card-versions";
 import { persistTrainerSettings } from "@/lib/trainer-settings";
-import { trainers, interactionModes, PRODUCT_VERSION, CHARACTER_VERSION, dayIndex, requiresSafetyRoute, safetyMessage, buildRecap, type TrainerId, type InteractionMode } from "@/lib/trainers";
+import { trainers, interactionModes, PRODUCT_VERSION, dayIndex, requiresSafetyRoute, safetyMessage, buildRecap, type TrainerId, type InteractionMode } from "@/lib/trainers";
 
 export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
 export type TrainerMessage = { id: string; role: "user" | "assistant"; text: string; trainer_id: TrainerId; created_at: string };
@@ -70,9 +72,25 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
     }),
   };
 }
-async function event(profile: TrainerProfile, session: string, name: string, key: string, payload: Record<string, string | number | boolean | null> = {}) {
-  await getRawDb().prepare("INSERT OR IGNORE INTO pilot_events (id,user_id,session_id,trainer_id,day_index,event_name,payload_json,product_version,created_at) VALUES (?,?,?,?,?,?,?,?,?)")
-    .bind(`${profile.pseudonym}:${name}:${key}`, profile.pseudonym, session, profile.trainer_id, dayIndex(profile.created_at), name, JSON.stringify(payload), PRODUCT_VERSION, new Date().toISOString()).run();
+async function event(
+  profile: TrainerProfile,
+  session: string,
+  name: string,
+  key: string,
+  payload: PilotEventPayload = {},
+) {
+  const skillId = typeof payload.skill_id === "string" ? payload.skill_id : null;
+  await preparePilotEvent(getRawDb(), {
+    id: `${profile.pseudonym}:${name}:${key}`,
+    userId: profile.pseudonym,
+    sessionId: session,
+    trainerId: profile.trainer_id,
+    dayIndex: dayIndex(profile.created_at),
+    eventName: name,
+    payload,
+    skillCardVersion: skillId ? skillCardVersion(skillId) : null,
+    createdAt: new Date().toISOString(),
+  }).run();
 }
 async function engage(profile: TrainerProfile, session: string) {
   const day = dayIndex(profile.created_at);
@@ -115,7 +133,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           .bind(user.userId, crypto.randomUUID(), body.name, body.trainerId, body.text, PRODUCT_VERSION, now, now).run();
         profile = (await profileFor(user.userId))!;
         await completeOnboarding(user, { focus: "start", goal: body.text, practiceStyle: "short", supportMode: "solo", safetyAcknowledged: true });
-        for (const name of ["onboarding_started", "trainer_viewed", "trainer_selected", "onboarding_completed"]) await event(profile, body.sessionId, name, "onboarding", { character_version: CHARACTER_VERSION });
+        for (const name of ["onboarding_started", "trainer_viewed", "trainer_selected", "onboarding_completed"]) await event(profile, body.sessionId, name, "onboarding");
         await message(profile, "assistant", trainers[profile.trainer_id].greeting, `${body.requestId}:welcome`);
       }
     }
@@ -130,7 +148,6 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         sessionId: body.sessionId,
         requestId: key,
         dayIndex: dayIndex(profile.created_at),
-        productVersion: PRODUCT_VERSION,
       });
       profile = (await profileFor(user.userId))!;
     }
@@ -170,7 +187,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           await db.prepare("INSERT INTO trainer_plans (id,user_id,situation_id,skill_json,skill_title,entry_mode,intensity_before,decision_reason_code,decision_version,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
             .bind(key, user.userId, recommendation.situationId, JSON.stringify(skill), skill.title, mode, body.intensity ?? 5, recommendation.reasonCode ?? "first_try", recommendation.decisionVersion ?? "outcome-policy-v2", new Date().toISOString()).run();
           await message(profile, "assistant", `${trainers[profile.trainer_id].greeting} ${recommendation.reason ?? ""} Попробуем «${skill.title}».`, `${key}:reply`);
-          await event(profile, body.sessionId, "skill_recommended", key, { skill_id: skill.id, skill_version: "1.0", decision_reason_code: recommendation.reasonCode ?? "first_try", decision_version: recommendation.decisionVersion ?? "outcome-policy-v2" });
+          await event(profile, body.sessionId, "skill_recommended", key, { skill_id: skill.id, decision_reason_code: recommendation.reasonCode ?? "first_try", decision_version: recommendation.decisionVersion ?? "outcome-policy-v2" });
           if (recommendation.analysis) await event(profile, body.sessionId, "mechanism_generated", key);
         }
       }
@@ -198,10 +215,10 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         });
         await db.prepare("UPDATE trainer_plans SET result=?,helpfulness=?,intensity_after=? WHERE id=? AND user_id=? AND result IS NULL").bind(body.result, body.helpfulness, body.intensity ?? null, plan.id, user.userId).run();
         await event(profile, body.sessionId, body.result === "failed" ? "action_failed" : "action_done", plan.id, { skill_id: skill.id, outcome: body.result });
-        await event(profile, body.sessionId, "helpfulness_rated", plan.id, { score: body.helpfulness });
-        await event(profile, body.sessionId, "day_completed", String(dayIndex(profile.created_at)));
-        if (plan.entry_mode === "practice" && body.result !== "failed") await event(profile, body.sessionId, "training_completed", plan.id);
-        if (plan.entry_mode === "distress") await event(profile, body.sessionId, "distress_flow_completed", plan.id, { before: plan.intensity_before, after: body.intensity! });
+        await event(profile, body.sessionId, "helpfulness_rated", plan.id, { skill_id: skill.id, score: body.helpfulness });
+        await event(profile, body.sessionId, "day_completed", String(dayIndex(profile.created_at)), { skill_id: skill.id });
+        if (plan.entry_mode === "practice" && body.result !== "failed") await event(profile, body.sessionId, "training_completed", plan.id, { skill_id: skill.id });
+        if (plan.entry_mode === "distress") await event(profile, body.sessionId, "distress_flow_completed", plan.id, { skill_id: skill.id, before: plan.intensity_before, after: body.intensity! });
         await engage(profile, body.sessionId);
         await message(profile, "assistant", body.result === "failed" ? trainers[profile.trainer_id].failure : trainers[profile.trainer_id].success, `${key}:reply`);
       }
