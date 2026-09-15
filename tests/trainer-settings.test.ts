@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildTrainerSettingsChange } from "../lib/trainer-settings";
+import { buildTrainerSettingsChange } from "../lib/trainer-settings.ts";
 
 const profile = {
   user_id: "user-1",
