@@ -1,5 +1,4 @@
 import {
-  decideNextStep,
   OUTCOME_REASON_CODES,
   type OutcomeReasonCode,
 } from "./outcome-policy.ts";
@@ -11,6 +10,7 @@ export type ContinuityPlan = {
   attempt_id: string | null;
   result: "done" | "failed" | "more" | null;
   helpfulness: number | null;
+  decision_reason_code: OutcomeReasonCode;
   created_at: string;
 };
 
@@ -47,8 +47,9 @@ export type TrainerContinuity = {
     planId: string;
     skillTitle: string;
     entryMode: string;
-    kind: "repeat" | "resize" | "replace" | "new";
+    kind: "repeat" | "transfer" | "resize" | "replace" | "new";
     reasonCode: OutcomeReasonCode;
+    reasonExplanation: string;
     prompt: string;
     actionLabel: string;
   } | null;
@@ -107,6 +108,23 @@ function outcomeLabel(result: NonNullable<ContinuityPlan["result"]>) {
   return "не получилось";
 }
 
+const decisionReasonExplanations: Record<OutcomeReasonCode, string> = {
+  [OUTCOME_REASON_CODES.repeatHelpful]:
+    "Сохранённое решение предлагает ещё раз проверить этот навык в похожей ситуации.",
+  [OUTCOME_REASON_CODES.transferHelpful]:
+    "Сохранённое решение предлагает проверить перенос навыка в новый совместимый контекст.",
+  [OUTCOME_REASON_CODES.resizeAfterFailed]:
+    "Сохранённое решение предлагает уменьшить шаг перед следующей попыткой.",
+  [OUTCOME_REASON_CODES.replaceLowFit]:
+    "Сохранённое решение не поддерживает автоматический повтор и предлагает другой навык.",
+  [OUTCOME_REASON_CODES.firstTry]:
+    "В сохранённом решении нет основания для автоматического повтора: это новая проверка.",
+};
+
+export function explainDecisionReason(reasonCode: OutcomeReasonCode) {
+  return decisionReasonExplanations[reasonCode];
+}
+
 function buildDay2CheckIn(
   plans: ContinuityPlan[],
   context: ContinuityContext,
@@ -158,14 +176,7 @@ function buildDays4to6(
   const current = plans[0] ?? null;
   if (!current || current.result === null) return null;
 
-  const decision = decideNextStep({
-    safetyAllowsPractice: true,
-    hasCompatibleEvidence: true,
-    completed: current.result !== "failed",
-    helpfulness: current.helpfulness,
-    avoidanceIncreased: false,
-  });
-  if (!decision) return null;
+  const decision = current.decision_reason_code;
 
   const score =
     current.helpfulness === null
@@ -177,6 +188,7 @@ function buildDays4to6(
     skillTitle: current.skill_title,
     entryMode: current.entry_mode,
     reasonCode: decision,
+    reasonExplanation: explainDecisionReason(decision),
   };
 
   if (decision === OUTCOME_REASON_CODES.repeatHelpful) {
@@ -185,6 +197,14 @@ function buildDays4to6(
       kind: "repeat",
       prompt: `${savedFact} Это основание проверить навык ещё раз, но не доказательство, что он работает всегда. Опиши похожий эпизод — сначала проверим безопасность и совместимость.`,
       actionLabel: "Проверить в похожей ситуации",
+    };
+  }
+  if (decision === OUTCOME_REASON_CODES.transferHelpful) {
+    return {
+      ...base,
+      kind: "transfer",
+      prompt: `${savedFact} Это основание проверить перенос навыка в новый контекст, но не доказательство, что он работает везде. Опиши новый эпизод — сначала проверим безопасность и совместимость.`,
+      actionLabel: "Проверить в новом контексте",
     };
   }
   if (decision === OUTCOME_REASON_CODES.resizeAfterFailed) {
