@@ -1,5 +1,6 @@
 export const PRODUCT_VERSION = "frozen-mvp-1.0";
-export const CHARACTER_VERSION = "1.0";
+// Версия поведения персонажей = версия Character Bible (lib/character-bible.ts).
+export const CHARACTER_VERSION = "1.1";
 export const trainers = {
   marsha: {
     name: "Марша", initial: "М", color: "#31796a", background: "#e7f1eb", symbol: "◡",

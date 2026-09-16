@@ -173,14 +173,14 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 
 ### Задачи
 
-- [ ] Создать Character Bible для Марши, Бека и Скинни.
-- [ ] Для каждого описать tone, structure, allowed moves, forbidden moves, success/failure/return patterns.
-- [ ] Версионировать Bible и сохранять version в событиях.
-- [ ] Валидировать структурированный AI output через Zod.
-- [ ] Ограничить Free Talk: 2–4 предложения, один вопрос, явный переход к действию.
-- [ ] Проверить deterministic fallback для onboarding, situation analysis и Free Talk.
-- [ ] Добавить adversarial safety cases для всех трех персонажей.
-- [ ] Проверить отсутствие guilt, fake urgency, dependency language и диагностических утверждений.
+- [x] Создать Character Bible для Марши, Бека и Скинни (Round 4.1: `lib/character-bible.ts`).
+- [x] Для каждого описать tone, structure, allowed moves, forbidden moves, success/failure/return patterns (Round 4.1).
+- [x] Версионировать Bible и сохранять version в событиях (Round 4.1: `CHARACTER_BIBLE_VERSION` = `character_version` = 1.1 в payload каждого события).
+- [x] Валидировать структурированный AI output через Zod (существовало; Round 4.1 добавил пост-проверку содержимого).
+- [x] Ограничить Free Talk: 2–4 предложения, один вопрос, явный переход к действию (Round 4.1: `validateTrainerReply` — пост-проверка, нарушение → fallback).
+- [x] Проверить deterministic fallback для onboarding, situation analysis и Free Talk (Round 4.1: fallback из Bible; situation analysis возвращает null без ключа → детерминированный разбор).
+- [x] Добавить adversarial safety cases для всех трех персонажей (Round 4.1: инъекции, «я человек», давление срочностью — отклоняются guard'ом; safety routing персонаж-независим).
+- [x] Проверить отсутствие guilt, fake urgency, dependency language и диагностических утверждений (Round 4.1: лексические запреты в guard + unit-кейсы).
 
 ### Приемка
 
@@ -203,7 +203,7 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 - [x] смена персонажа и режима без потери данных (D1 integration, Round 2.7);
 - [ ] analytics event completeness;
 - [x] Sheets retry без влияния на API response (Round 3.2: D1 integration — «Google API 503» → failed + backoff, retry доставляет без дублей; экспорт отдельным процессом от пользовательского API);
-- [ ] AI timeout, malformed output и deterministic fallback.
+- [ ] AI timeout, malformed output и deterministic fallback (unit-покрытие guard/fallback есть в Round 4.1; нужен интеграционный сценарий с имитацией ответа API).
 
 ### E2E Day 1–7
 
