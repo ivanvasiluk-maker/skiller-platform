@@ -95,7 +95,7 @@ export function prepareExportQueueStatement(
   const now = input.now ?? new Date().toISOString();
   return db
     .prepare(
-      "INSERT OR IGNORE INTO export_queue (id, event_id, user_id, status, attempts, retry_at, last_error, created_at, updated_at) VALUES (?,?,?,'pending',0,?,NULL,?,?)",
+      "INSERT OR IGNORE INTO export_queue (id, event_id, user_id, status, attempts, retry_at, last_error, created_at, updated_at) VALUES (?,?,?,'pending',0,NULL,NULL,?,?)",
     )
-    .bind(`export:${input.eventId}`, input.eventId, input.userId, now, now, now);
+    .bind(`export:${input.eventId}`, input.eventId, input.userId, now, now);
 }

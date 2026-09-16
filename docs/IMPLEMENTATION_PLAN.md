@@ -70,7 +70,7 @@
 - [x] Создать отдельную тестовую D1-базу и тестовые bindings.
 - [x] Зафиксировать `PRODUCT_VERSION`, `CHARACTER_VERSION`, версии skill cards во всех обязательных событиях (Round 0.1 Event Versions).
 - [x] Добавить seed/reset только для тестовой среды.
-- [ ] Описать обязательные env/bindings без публикации секретов.
+- [x] Описать обязательные env/bindings без публикации секретов (Round 3.2: `docs/ENVIRONMENT.md`).
 
 ### Приемка
 
@@ -152,10 +152,10 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 - [x] Зафиксировать event schema и обязательные payload-поля (Round 3.1: `lib/pilot-event-schema.ts`, 27 событий Frozen Spec).
 - [x] Проверить наличие всех событий Frozen Spec (Round 3.1: unit-тест покрывает обязательный перечень).
 - [x] Создать export queue: `pending`, `processing`, `sent`, `failed`, `retry_at`, `attempts` (Round 3.1: таблица `export_queue` + `lib/export-queue.ts`).
-- [ ] Реализовать server-side append/upsert в Sheets.
+- [x] Реализовать server-side append/upsert в Sheets (Round 3.2: `lib/sheets-exporter.ts` + `app/api/export/route.ts`; EVENTS/FEEDBACK — append с dedupe по event_id, USERS — upsert, DAILY/COHORTS — snapshot).
 - [x] Добавить exponential backoff и dead-letter logging (Round 3.1: backoff 60s×2^n, dead-letter после 8 попыток).
-- [x] Не экспортировать тексты психологических разговоров и заметок (Round 3.1: `minimizePayloadForExport` allowlist без text/note/description).
-- [ ] Создать вкладки USERS, EVENTS, DAILY, FEEDBACK, COHORTS.
+- [x] Не экспортировать тексты психологических разговоров и заметок (Round 3.1: `minimizePayloadForExport` allowlist без text/note/description; Round 3.2: D1 integration проверяет отсутствие приватного текста в листе).
+- [x] Создать вкладки USERS, EVENTS, DAILY, FEEDBACK, COHORTS (Round 3.2: `lib/sheets-schema.ts` + auto-header).
 - [x] Подготовить SQL/скрипт для D2, D3, D7 engaged retention и action completion (Round 3.1: `scripts/pilot-metrics.mjs`, `npm run pilot:metrics`).
 - [x] Добавить сверку количества D1 events и экспортированных строк (Round 3.1: `npm run pilot:reconcile`).
 
@@ -202,7 +202,7 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 - [ ] repeat/transfer/resize/replacement;
 - [x] смена персонажа и режима без потери данных (D1 integration, Round 2.7);
 - [ ] analytics event completeness;
-- [ ] Sheets retry без влияния на API response;
+- [x] Sheets retry без влияния на API response (Round 3.2: D1 integration — «Google API 503» → failed + backoff, retry доставляет без дублей; экспорт отдельным процессом от пользовательского API);
 - [ ] AI timeout, malformed output и deterministic fallback.
 
 ### E2E Day 1–7

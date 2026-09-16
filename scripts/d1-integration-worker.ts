@@ -14,6 +14,8 @@ import {
   recordPilotEvent,
 } from "../lib/pilot-events";
 import { skillCardVersion } from "../lib/skill-card-versions";
+import { runSheetsExport } from "../lib/sheets-exporter";
+import { createInMemorySheets } from "../lib/in-memory-sheets";
 
 type Env = { DB: D1Database };
 const scenarios = [
@@ -385,6 +387,123 @@ async function runEventVersioning(db: D1Database) {
   }));
 }
 
+async function runSheetsExportCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const userId = `sheets-user-${suffix}`;
+  const createdAt = "2026-09-11T07:30:00.000Z";
+  await recordPilotEvent(db, {
+    id: `sheets-open-${suffix}`,
+    userId,
+    sessionId: `sheets-session-${suffix}`,
+    trainerId: "beck",
+    dayIndex: 1,
+    eventName: "app_open",
+    payload: {},
+    skillCardVersion: null,
+    createdAt,
+  });
+  await recordPilotEvent(db, {
+    id: `sheets-rated-${suffix}`,
+    userId,
+    sessionId: `sheets-session-${suffix}`,
+    trainerId: "beck",
+    dayIndex: 3,
+    eventName: "action_rated",
+    payload: {
+      skill_id: "micro-start",
+      helpfulness: 8,
+      completed: true,
+      decision_reason_code: "first_try",
+      entry_mode: "stuck",
+      // приватное поле, которое не должно попасть в лист:
+      text: "приватный текст разговора",
+    } as never,
+    skillCardVersion: skillCardVersion("micro-start"),
+    createdAt: "2026-09-13T18:00:00.000Z",
+  });
+  await recordPilotEvent(db, {
+    id: `sheets-return-${suffix}`,
+    userId,
+    sessionId: `sheets-session-${suffix}`,
+    trainerId: "beck",
+    dayIndex: 3,
+    eventName: "engaged_return",
+    payload: {},
+    skillCardVersion: null,
+    createdAt: "2026-09-13T09:00:00.000Z",
+  });
+
+  const sheets = createInMemorySheets();
+  const first = await runSheetsExport(db, sheets.transport);
+  const eventsTab = sheets.tabs.get("EVENTS") ?? [];
+  const usersTab = sheets.tabs.get("USERS") ?? [];
+  const dailyTab = sheets.tabs.get("DAILY") ?? [];
+  const cohortsTab = sheets.tabs.get("COHORTS") ?? [];
+  const queueAfterFirst = await db
+    .prepare("SELECT status FROM export_queue WHERE user_id=? ORDER BY event_id")
+    .bind(userId)
+    .all<{ status: string }>();
+
+  // Повторный прогон: всё уже отправлено, новых строк в листе быть не должно.
+  const second = await runSheetsExport(db, sheets.transport);
+  const eventsAfterSecond = (sheets.tabs.get("EVENTS") ?? []).length;
+
+  // Третий прогон с новым событием и сломанным транспортом: failed + retry.
+  await recordPilotEvent(db, {
+    id: `sheets-return7-${suffix}`,
+    userId,
+    sessionId: `sheets-session-${suffix}`,
+    trainerId: "beck",
+    dayIndex: 7,
+    eventName: "engaged_return",
+    payload: {},
+    skillCardVersion: null,
+    createdAt: "2026-09-17T09:00:00.000Z",
+  });
+  sheets.failWith(new Error("Google API 503"));
+  const third = await runSheetsExport(db, sheets.transport);
+  const failedRow = await db
+    .prepare("SELECT status, attempts, retry_at FROM export_queue WHERE event_id=?")
+    .bind(`sheets-return7-${suffix}`)
+    .first<{ status: string; attempts: number; retry_at: string | null }>();
+  sheets.failWith(null);
+  // Эмулируем наступление времени retry (backoff 60s в production).
+  await db
+    .prepare("UPDATE export_queue SET retry_at=NULL WHERE event_id=?")
+    .bind(`sheets-return7-${suffix}`)
+    .run();
+  const fourth = await runSheetsExport(db, sheets.transport);
+  const eventsFinal = sheets.tabs.get("EVENTS") ?? [];
+  // Строки, относящиеся именно к этому сценарию (в базе есть события других сценариев).
+  const myEventRows = eventsTab.filter((row) => row[3] === userId);
+  const myEventRowsFinal = eventsFinal.filter((row) => row[3] === userId);
+  const myUserRows = usersTab.filter((row) => row[0] === userId);
+
+  return {
+    firstFailed: first.failed,
+    firstDeadLettered: first.deadLettered,
+    myEventRows: myEventRows.length,
+    noPrivateText: !JSON.stringify(eventsTab).includes("приватный текст"),
+    myUserRows: myUserRows.length,
+    dailyHasHeader: (dailyTab[0]?.[0] ?? null) === "user_id",
+    cohortsHasData: cohortsTab.length >= 2,
+    queueAfterFirst: queueAfterFirst.results.map((row) => row.status),
+    secondClaimed: second.claimed,
+    eventsAfterSecond,
+    eventsRowsFirst: eventsTab.length,
+    third: { claimed: third.claimed, failed: third.failed, sent: third.sent },
+    failedRow: failedRow
+      ? {
+          status: failedRow.status,
+          attempts: Number(failedRow.attempts),
+          hasRetryAt: failedRow.retry_at !== null,
+        }
+      : null,
+    fourth: { claimed: fourth.claimed, sent: fourth.sent, failed: fourth.failed },
+    myEventRowsFinal: myEventRowsFinal.length,
+  };
+}
+
 type IdempotencyResponse = { requestId: string; mutationCount: number };
 
 async function runPilotAnalytics(db: D1Database) {
@@ -487,6 +606,9 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/pilot-analytics") {
       return Response.json(await runPilotAnalytics(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/sheets-export") {
+      return Response.json(await runSheetsExportCycle(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/outcome-idempotency") {
       return Response.json(await runOutcomeIdempotency(env.DB));

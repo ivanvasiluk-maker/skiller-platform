@@ -76,11 +76,12 @@ export async function enqueueEventExport(
     firstEventAt: now,
     now,
   });
+  // retry_at = NULL: свежая запись доступна для claim немедленно.
   await db
     .prepare(
-      "INSERT OR IGNORE INTO export_queue (id, event_id, user_id, status, attempts, retry_at, last_error, created_at, updated_at) VALUES (?,?,?,'pending',0,?,NULL,?,?)",
+      "INSERT OR IGNORE INTO export_queue (id, event_id, user_id, status, attempts, retry_at, last_error, created_at, updated_at) VALUES (?,?,?,'pending',0,NULL,NULL,?,?)",
     )
-    .bind(`export:${input.eventId}`, input.eventId, input.userId, now, now, now)
+    .bind(`export:${input.eventId}`, input.eventId, input.userId, now, now)
     .run();
 }
 

@@ -134,6 +134,15 @@ async function runPilotAnalytics(baseUrl) {
   return body;
 }
 
+async function runSheetsExport(baseUrl) {
+  const response = await fetch(`${baseUrl}/sheets-export`, {
+    method: "POST",
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  return body;
+}
+
 async function runIdempotentRequest(baseUrl, requestId) {
   const response = await fetch(`${baseUrl}/idempotency`, {
     method: "POST",
@@ -363,8 +372,34 @@ try {
     eventsCount: 1,
   });
 
+  const sheetsExport = await runSheetsExport(baseUrl);
+  // В очереди есть события предыдущих сценариев — проверяем инварианты,
+  // относящиеся к событиям этого сценария.
+  assert.equal(sheetsExport.firstFailed, 0);
+  assert.equal(sheetsExport.firstDeadLettered, 0);
+  assert.equal(sheetsExport.myEventRows, 3, "3 события сценария попали в EVENTS");
+  assert.equal(sheetsExport.noPrivateText, true);
+  assert.equal(sheetsExport.myUserRows, 1, "upsert USERS без дублей");
+  assert.equal(sheetsExport.dailyHasHeader, true);
+  assert.equal(sheetsExport.cohortsHasData, true);
+  assert.deepEqual(sheetsExport.queueAfterFirst, ["sent", "sent", "sent"]);
+  assert.equal(sheetsExport.secondClaimed, 0, "повторный прогон: очередь пуста");
+  assert.equal(
+    sheetsExport.eventsAfterSecond,
+    sheetsExport.eventsRowsFirst,
+    "повторный прогон не создаёт дубли",
+  );
+  assert.deepEqual(sheetsExport.third, { claimed: 1, failed: 1, sent: 0 });
+  assert.deepEqual(sheetsExport.failedRow, {
+    status: "failed",
+    attempts: 1,
+    hasRetryAt: true,
+  });
+  assert.deepEqual(sheetsExport.fourth, { claimed: 1, sent: 1, failed: 0 });
+  assert.equal(sheetsExport.myEventRowsFinal, 4, "retry доставил 4-е событие");
+
   console.log(
-    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution and export queue.",
+    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution, export queue and Sheets mirror cycle with failure recovery.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");
