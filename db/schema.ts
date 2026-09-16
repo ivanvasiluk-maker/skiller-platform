@@ -143,3 +143,37 @@ export const psychologistAccess = sqliteTable("psychologist_access", {
   shareNotes: integer("share_notes", { mode: "boolean" }).notNull().default(false),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
+
+export const cohorts = sqliteTable("cohorts", {
+  key: text("key").primaryKey(),
+  productVersion: text("product_version").notNull(),
+  startsOn: text("starts_on").notNull(),
+  createdAt: timestamp(),
+});
+
+export const cohortMembers = sqliteTable(
+  "cohort_members",
+  {
+    cohortKey: text("cohort_key").notNull().references(() => cohorts.key),
+    userId: text("user_id").notNull(),
+    firstEventAt: text("first_event_at").notNull(),
+    createdAt: timestamp(),
+  },
+  (table) => [uniqueIndex("idx_cohort_members_pk").on(table.cohortKey, table.userId)],
+);
+
+export const exportQueue = sqliteTable(
+  "export_queue",
+  {
+    id: text("id").primaryKey(),
+    eventId: text("event_id").notNull(),
+    userId: text("user_id").notNull(),
+    status: text("status").notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    retryAt: text("retry_at"),
+    lastError: text("last_error"),
+    createdAt: timestamp(),
+    updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  },
+  (table) => [index("idx_export_queue_status_retry").on(table.status, table.retryAt)],
+);

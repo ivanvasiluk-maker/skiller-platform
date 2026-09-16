@@ -1,5 +1,9 @@
 import type { InteractionMode, TrainerId } from "./trainers.ts";
-import { preparePilotEvent } from "./pilot-events.ts";
+import {
+  preparePilotEvent,
+  prepareCohortAttributionStatements,
+  prepareExportQueueStatement,
+} from "./pilot-events.ts";
 
 export type TrainerSettingsProfile = {
   user_id: string;
@@ -77,19 +81,32 @@ export async function persistTrainerSettings(input: {
         "UPDATE trainer_profiles SET trainer_id=?,interaction_mode=? WHERE user_id=?",
       )
       .bind(change.trainerId, change.interactionMode, input.profile.user_id),
-    ...change.events.map((event) =>
-      preparePilotEvent(input.db, {
-        id: `${input.profile.pseudonym}:${event.name}:${input.requestId}`,
-        userId: input.profile.pseudonym,
-        sessionId: input.sessionId,
-        trainerId: event.trainerId,
-        dayIndex: input.dayIndex,
-        eventName: event.name,
-        payload: event.payload,
-        skillCardVersion: null,
-        createdAt: now,
-      }),
-    ),
+    ...prepareCohortAttributionStatements(input.db, {
+      userId: input.profile.pseudonym,
+      firstEventAt: now,
+      now,
+    }),
+    ...change.events.flatMap((event) => {
+      const eventId = `${input.profile.pseudonym}:${event.name}:${input.requestId}`;
+      return [
+        preparePilotEvent(input.db, {
+          id: eventId,
+          userId: input.profile.pseudonym,
+          sessionId: input.sessionId,
+          trainerId: event.trainerId,
+          dayIndex: input.dayIndex,
+          eventName: event.name,
+          payload: event.payload,
+          skillCardVersion: null,
+          createdAt: now,
+        }),
+        prepareExportQueueStatement(input.db, {
+          eventId,
+          userId: input.profile.pseudonym,
+          now,
+        }),
+      ];
+    }),
   ];
   await input.db.batch(statements);
   return change;

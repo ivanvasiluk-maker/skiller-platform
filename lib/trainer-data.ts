@@ -6,7 +6,7 @@ import { ensureUser, recommendSkill, startAttempt, completeAttempt, completeOnbo
 import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-idempotency";
 import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-continuity";
 import type { OutcomeReasonCode } from "@/lib/outcome-policy";
-import { preparePilotEvent, type PilotEventPayload } from "@/lib/pilot-events";
+import { recordPilotEvent, type PilotEventPayload } from "@/lib/pilot-events";
 import { skillCardVersion } from "@/lib/skill-card-versions";
 import { persistTrainerSettings } from "@/lib/trainer-settings";
 import { trainers, interactionModes, PRODUCT_VERSION, dayIndex, requiresSafetyRoute, safetyMessage, buildRecap, type TrainerId, type InteractionMode } from "@/lib/trainers";
@@ -26,6 +26,10 @@ const statements = [
   "CREATE INDEX IF NOT EXISTS pilot_events_user ON pilot_events(user_id, day_index)",
   "CREATE TABLE IF NOT EXISTS pilot_feedback (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, day_index INTEGER NOT NULL, helpfulness INTEGER NOT NULL, understood INTEGER NOT NULL, continue_intent INTEGER NOT NULL, helped TEXT NOT NULL, annoyed TEXT NOT NULL, created_at TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS trainer_requests (user_id TEXT NOT NULL, request_id TEXT NOT NULL, response_json TEXT, created_at TEXT NOT NULL, PRIMARY KEY(user_id, request_id))",
+  "CREATE TABLE IF NOT EXISTS cohorts (key TEXT PRIMARY KEY, product_version TEXT NOT NULL, starts_on TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+  "CREATE TABLE IF NOT EXISTS cohort_members (cohort_key TEXT NOT NULL, user_id TEXT NOT NULL, first_event_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, PRIMARY KEY(cohort_key, user_id))",
+  "CREATE TABLE IF NOT EXISTS export_queue (id TEXT PRIMARY KEY, event_id TEXT NOT NULL, user_id TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0, retry_at TEXT, last_error TEXT, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)",
+  "CREATE INDEX IF NOT EXISTS idx_export_queue_status_retry ON export_queue(status, retry_at)",
 ];
 export async function ensureTrainerStorage() {
   const db = getRawDb();
@@ -80,7 +84,8 @@ async function event(
   payload: PilotEventPayload = {},
 ) {
   const skillId = typeof payload.skill_id === "string" ? payload.skill_id : null;
-  await preparePilotEvent(getRawDb(), {
+  const createdAt = new Date().toISOString();
+  await recordPilotEvent(getRawDb(), {
     id: `${profile.pseudonym}:${name}:${key}`,
     userId: profile.pseudonym,
     sessionId: session,
@@ -89,8 +94,8 @@ async function event(
     eventName: name,
     payload,
     skillCardVersion: skillId ? skillCardVersion(skillId) : null,
-    createdAt: new Date().toISOString(),
-  }).run();
+    createdAt,
+  });
 }
 async function engage(profile: TrainerProfile, session: string) {
   const day = dayIndex(profile.created_at);

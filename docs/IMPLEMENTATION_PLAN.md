@@ -148,16 +148,16 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 
 ### Задачи
 
-- [ ] Добавить `cohorts` и cohort attribution пользователя.
-- [ ] Зафиксировать event schema и обязательные payload-поля.
-- [ ] Проверить наличие всех событий Frozen Spec.
-- [ ] Создать export queue: `pending`, `processing`, `sent`, `failed`, `retry_at`, `attempts`.
+- [x] Добавить `cohorts` и cohort attribution пользователя (Round 3.1: ключ cohort = UTC-день первого события + product version, автоприсвоение при первом pilot event).
+- [x] Зафиксировать event schema и обязательные payload-поля (Round 3.1: `lib/pilot-event-schema.ts`, 27 событий Frozen Spec).
+- [x] Проверить наличие всех событий Frozen Spec (Round 3.1: unit-тест покрывает обязательный перечень).
+- [x] Создать export queue: `pending`, `processing`, `sent`, `failed`, `retry_at`, `attempts` (Round 3.1: таблица `export_queue` + `lib/export-queue.ts`).
 - [ ] Реализовать server-side append/upsert в Sheets.
-- [ ] Добавить exponential backoff и dead-letter logging.
-- [ ] Не экспортировать тексты психологических разговоров и заметок.
+- [x] Добавить exponential backoff и dead-letter logging (Round 3.1: backoff 60s×2^n, dead-letter после 8 попыток).
+- [x] Не экспортировать тексты психологических разговоров и заметок (Round 3.1: `minimizePayloadForExport` allowlist без text/note/description).
 - [ ] Создать вкладки USERS, EVENTS, DAILY, FEEDBACK, COHORTS.
-- [ ] Подготовить SQL/скрипт для D2, D3, D7 engaged retention и action completion.
-- [ ] Добавить сверку количества D1 events и экспортированных строк.
+- [x] Подготовить SQL/скрипт для D2, D3, D7 engaged retention и action completion (Round 3.1: `scripts/pilot-metrics.mjs`, `npm run pilot:metrics`).
+- [x] Добавить сверку количества D1 events и экспортированных строк (Round 3.1: `npm run pilot:reconcile`).
 
 ### Приемка
 

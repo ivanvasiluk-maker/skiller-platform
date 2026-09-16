@@ -9,7 +9,10 @@ import {
 import { persistTrainerSettings } from "../lib/trainer-settings";
 import { dayIndex } from "../lib/trainers";
 import { completeAttempt } from "../lib/skiller-data";
-import { preparePilotEvent } from "../lib/pilot-events";
+import {
+  preparePilotEvent,
+  recordPilotEvent,
+} from "../lib/pilot-events";
 import { skillCardVersion } from "../lib/skill-card-versions";
 
 type Env = { DB: D1Database };
@@ -341,8 +344,7 @@ async function runSettingsContinuity(db: D1Database) {
 async function runEventVersioning(db: D1Database) {
   await db.prepare(
     "CREATE TABLE IF NOT EXISTS pilot_events (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, session_id TEXT NOT NULL, trainer_id TEXT NOT NULL, day_index INTEGER NOT NULL, event_name TEXT NOT NULL, payload_json TEXT NOT NULL, product_version TEXT NOT NULL, created_at TEXT NOT NULL, exported_at TEXT)",
-  ).run();
-  const suffix = crypto.randomUUID();
+  ).run();  const suffix = crypto.randomUUID();
   const userId = `version-user-${suffix}`;
   const createdAt = new Date().toISOString();
   await db.batch([
@@ -384,6 +386,61 @@ async function runEventVersioning(db: D1Database) {
 }
 
 type IdempotencyResponse = { requestId: string; mutationCount: number };
+
+async function runPilotAnalytics(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const userId = `analytics-user-${suffix}`;
+  const createdAt = "2026-09-10T08:00:00.000Z";
+  await recordPilotEvent(db, {
+    id: `analytics-event-${suffix}`,
+    userId,
+    sessionId: `analytics-session-${suffix}`,
+    trainerId: "marsha",
+    dayIndex: 1,
+    eventName: "app_open",
+    payload: {},
+    skillCardVersion: null,
+    createdAt,
+  });
+  // Повторная запись того же события: идемпотентность queue и cohort.
+  await recordPilotEvent(db, {
+    id: `analytics-event-${suffix}`,
+    userId,
+    sessionId: `analytics-session-${suffix}`,
+    trainerId: "marsha",
+    dayIndex: 1,
+    eventName: "app_open",
+    payload: {},
+    skillCardVersion: null,
+    createdAt,
+  });
+
+  const cohort = await db
+    .prepare("SELECT cohort_key, user_id, first_event_at FROM cohort_members WHERE user_id=?")
+    .bind(userId)
+    .first<{ cohort_key: string; user_id: string; first_event_at: string }>();
+  const queue = await db
+    .prepare("SELECT id, status, attempts FROM export_queue WHERE event_id=?")
+    .bind(`analytics-event-${suffix}`)
+    .all<{ id: string; status: string; attempts: number }>();
+  const cohortRow = await db
+    .prepare("SELECT key, product_version FROM cohorts WHERE key=?")
+    .bind(cohort?.cohort_key ?? "")
+    .first<{ key: string; product_version: string }>();
+  const eventsCount = await db
+    .prepare("SELECT count(*) AS count FROM pilot_events WHERE user_id=?")
+    .bind(userId)
+    .first<{ count: number }>();
+
+  return {
+    cohortKey: cohort?.cohort_key ?? null,
+    firstEventAt: cohort?.first_event_at ?? null,
+    cohortVersion: cohortRow?.product_version ?? null,
+    queuedCount: queue.results.length,
+    queuedStatus: queue.results[0]?.status ?? null,
+    eventsCount: Number(eventsCount?.count ?? 0),
+  };
+}
 
 async function ensureIdempotencyStorage(db: D1Database) {
   await db.batch([
@@ -427,6 +484,9 @@ const worker: ExportedHandler<Env> = {
     if (request.method === "GET" && url.pathname === "/health") {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
       return Response.json(row);
+    }
+    if (request.method === "POST" && url.pathname === "/pilot-analytics") {
+      return Response.json(await runPilotAnalytics(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/outcome-idempotency") {
       return Response.json(await runOutcomeIdempotency(env.DB));

@@ -125,6 +125,15 @@ async function runEventVersioning(baseUrl) {
   return body;
 }
 
+async function runPilotAnalytics(baseUrl) {
+  const response = await fetch(`${baseUrl}/pilot-analytics`, {
+    method: "POST",
+  });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  return body;
+}
+
 async function runIdempotentRequest(baseUrl, requestId) {
   const response = await fetch(`${baseUrl}/idempotency`, {
     method: "POST",
@@ -344,10 +353,29 @@ try {
   );
   assert.deepEqual(await countResponse.json(), { mutationCount: 1 });
 
+  const pilotAnalytics = await runPilotAnalytics(baseUrl);
+  assert.deepEqual(pilotAnalytics, {
+    cohortKey: "2026-09-10:frozen-mvp-1.0",
+    firstEventAt: "2026-09-10T08:00:00.000Z",
+    cohortVersion: "frozen-mvp-1.0",
+    queuedCount: 1,
+    queuedStatus: "pending",
+    eventsCount: 1,
+  });
+
   console.log(
-    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, and duplicate request mutation.",
+    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution and export queue.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");
-  rmSync(persistPath, { recursive: true, force: true });
+  // Windows может удерживать файлы локальной D1 после завершения wrangler;
+  // даём ОС освободить дескрипторы и повторяем удаление.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      rmSync(persistPath, { recursive: true, force: true });
+      break;
+    } catch {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
+    }
+  }
 }
