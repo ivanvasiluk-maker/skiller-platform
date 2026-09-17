@@ -264,10 +264,11 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
 }
 
 async function freeTalk(profile: TrainerProfile, messages: TrainerMessage[]): Promise<string> {
+  const processEnv = typeof process !== "undefined" ? process.env : undefined;
   return produceFreeTalkReply({
     profile,
     messages,
-    apiKey: process.env.OPENAI_API_KEY || env.OPENAI_API_KEY || "",
-    model: process.env.OPENAI_MODEL || env.OPENAI_MODEL || "gpt-4.1-mini",
+    apiKey: processEnv?.OPENAI_API_KEY || env.OPENAI_API_KEY || "",
+    model: processEnv?.OPENAI_MODEL || env.OPENAI_MODEL || "gpt-4.1-mini",
   });
 }

@@ -97,7 +97,7 @@ export async function transcribeAudio(file: File): Promise<{ text: string }> {
 
   const form = new FormData();
   form.set("file", file, safeAudioFileName(file));
-  form.set("model", process.env.OPENAI_TRANSCRIBE_MODEL || env.OPENAI_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe");
+  form.set("model", runtimeEnv("OPENAI_TRANSCRIBE_MODEL") || env.OPENAI_TRANSCRIBE_MODEL || "gpt-4o-mini-transcribe");
   form.set("language", "ru");
 
   const response = await fetch("https://api.openai.com/v1/audio/transcriptions", {
@@ -133,7 +133,7 @@ export async function draftOnboardingGoal(story: string): Promise<OnboardingGoal
 
 export async function analyzeSituation(input: RecommendationInput): Promise<SituationAnalysis | null> {
   const apiKey = getOpenAIKey();
-  if (!apiKey || process.env.SKILLER_AI_DISABLED === "1" || input.description.trim().length < 12) return null;
+  if (!apiKey || runtimeEnv("SKILLER_AI_DISABLED") === "1" || input.description.trim().length < 12) return null;
 
   return requestStructured<SituationAnalysis>({
     apiKey,
@@ -188,7 +188,7 @@ async function requestStructured<T>({ apiKey, schema, schemaName, system, user, 
         "content-type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_MODEL || env.OPENAI_MODEL || "gpt-4.1-mini",
+        model: runtimeEnv("OPENAI_MODEL") || env.OPENAI_MODEL || "gpt-4.1-mini",
         input: [
           { role: "system", content: [{ type: "input_text", text: system }] },
           { role: "user", content: [{ type: "input_text", text: user }] },
@@ -246,5 +246,10 @@ function requireOpenAIKey() {
 }
 
 function getOpenAIKey() {
-  return process.env.OPENAI_API_KEY || env.OPENAI_API_KEY || "";
+  return runtimeEnv("OPENAI_API_KEY") || env.OPENAI_API_KEY || "";
+}
+
+/** process.env доступен не во всех рантаймах: в чистом workerd process не определён. */
+function runtimeEnv(name: string): string | undefined {
+  return typeof process !== "undefined" ? process.env?.[name] : undefined;
 }

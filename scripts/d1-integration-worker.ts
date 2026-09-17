@@ -22,6 +22,7 @@ import {
 import { requiresSafetyRoute, safetyMessage } from "../lib/trainers";
 import { produceFreeTalkReply } from "../lib/free-talk";
 import { buildFreeTalkFallback, getCharacterBible } from "../lib/character-bible";
+import { trainerCommand } from "../lib/trainer-data";
 import { runSheetsExport } from "../lib/sheets-exporter";
 import { createInMemorySheets } from "../lib/in-memory-sheets";
 
@@ -91,13 +92,13 @@ async function runScenario(
       "INSERT OR IGNORE INTO skills (id,title,approach,track,description,why,steps_json,duration_seconds) VALUES (?,?,?,?,?,?,?,?)",
     ).bind(
       skillId,
-      "Микростарт",
-      "behavioral",
-      "action",
-      "Первый маленький шаг",
-      "Снижает порог входа",
-      "[]",
-      60,
+      "Минимальный законченный старт",
+      "CBT · поведенческий навык",
+      "Работа и фокус",
+      "Сведите вход в задачу к действию, которое оставит наблюдаемый след и займёт не больше двух минут.",
+      "Снижает сложность входа, но сохраняет движение к важной задаче.",
+      '[{"title":"Назовите след","copy":"Что должно остаться после действия?"},{"title":"Уменьшите до двух минут","copy":"Оставьте только начало, которое можно увидеть."},{"title":"Сделайте без улучшения","copy":"Цель — проверить вход, а не закончить задачу."}]',
+      120,
     ),
   ]);
 
@@ -164,7 +165,7 @@ async function runOutcomeIdempotency(db: D1Database) {
       .bind(userId, user.email, user.displayName),
     db.prepare(
       "INSERT OR IGNORE INTO skills (id,title,approach,track,description,why,steps_json,duration_seconds) VALUES (?,?,?,?,?,?,?,?)",
-    ).bind("micro-start", "Микростарт", "behavioral", "action", "Первый маленький шаг", "Снижает порог входа", "[]", 60),
+    ).bind("micro-start", "Минимальный законченный старт", "CBT · поведенческий навык", "Работа и фокус", "Сведите вход в задачу к действию, которое оставит наблюдаемый след и займёт не больше двух минут.", "Снижает сложность входа, но сохраняет движение к важной задаче.", '[{"title":"Назовите след","copy":"Что должно остаться после действия?"},{"title":"Уменьшите до двух минут","copy":"Оставьте только начало, которое можно увидеть."},{"title":"Сделайте без улучшения","copy":"Цель — проверить вход, а не закончить задачу."}]', 120),
     db.prepare(
       "INSERT INTO situations (id,user_id,kind,intensity,safety_status) VALUES (?,?,?,?,?)",
     ).bind(situationId, userId, "stuck", 6, "self-guided"),
@@ -251,7 +252,7 @@ async function runSettingsContinuity(db: D1Database) {
       .bind(userId, userId + "@example.invalid", "Settings Integration"),
     db.prepare(
       "INSERT OR IGNORE INTO skills (id,title,approach,track,description,why,steps_json,duration_seconds) VALUES (?,?,?,?,?,?,?,?)",
-    ).bind("micro-start", "Микростарт", "behavioral", "action", "Первый маленький шаг", "Снижает порог входа", "[]", 60),
+    ).bind("micro-start", "Минимальный законченный старт", "CBT · поведенческий навык", "Работа и фокус", "Сведите вход в задачу к действию, которое оставит наблюдаемый след и займёт не больше двух минут.", "Снижает сложность входа, но сохраняет движение к важной задаче.", '[{"title":"Назовите след","copy":"Что должно остаться после действия?"},{"title":"Уменьшите до двух минут","copy":"Оставьте только начало, которое можно увидеть."},{"title":"Сделайте без улучшения","copy":"Цель — проверить вход, а не закончить задачу."}]', 120),
     db.prepare(
       "INSERT INTO trainer_profiles (user_id,pseudonym,name,trainer_id,interaction_mode,main_problem,consent_version,created_at,last_interaction_at) VALUES (?,?,?,?,?,?,?,?,?)",
     ).bind(userId, pseudonym, "Settings Integration", "marsha", "support", "Начать задачу", "test-v1", profileCreatedAt, profileCreatedAt),
@@ -582,7 +583,7 @@ async function runOutcomeSemantics(db: D1Database) {
     await db.batch([
       db.prepare("INSERT INTO users (id,email,display_name) VALUES (?,?,?)").bind(runUserId, `${runUserId}@example.invalid`, "Semantics"),
       db.prepare("INSERT OR IGNORE INTO skills (id,title,approach,track,description,why,steps_json,duration_seconds) VALUES (?,?,?,?,?,?,?,?)")
-        .bind("micro-start", "Микростарт", "behavioral", "action", "Первый маленький шаг", "Снижает порог входа", "[]", 60),
+        .bind("micro-start", "Минимальный законченный старт", "CBT · поведенческий навык", "Работа и фокус", "Сведите вход в задачу к действию, которое оставит наблюдаемый след и займёт не больше двух минут.", "Снижает сложность входа, но сохраняет движение к важной задаче.", '[{"title":"Назовите след","copy":"Что должно остаться после действия?"},{"title":"Уменьшите до двух минут","copy":"Оставьте только начало, которое можно увидеть."},{"title":"Сделайте без улучшения","copy":"Цель — проверить вход, а не закончить задачу."}]', 120),
       db.prepare("INSERT INTO situations (id,user_id,kind,intensity,safety_status) VALUES (?,?,?,?,?)").bind(situationId, runUserId, "stuck", 5, "self-guided"),
       db.prepare("INSERT INTO skill_attempts (id,user_id,situation_id,skill_id,mode,status) VALUES (?,?,?,?,?,?)").bind(attemptId, runUserId, situationId, "micro-start", "guided", "started"),
     ]);
@@ -792,6 +793,112 @@ async function runAiFallback(db: D1Database) {
   };
 }
 
+type PlanSnapshot = {
+  skillId: string;
+  reasonCode: string;
+  stepCount: number;
+  durationSeconds: number;
+};
+
+function snapshotPlan(plans: { skill_json: string; decision_reason_code: string }[]): PlanSnapshot {
+  const plan = plans[0];
+  const skill = JSON.parse(plan.skill_json) as {
+    id: string;
+    durationSeconds: number;
+    steps: unknown[];
+  };
+  return {
+    skillId: skill.id,
+    reasonCode: plan.decision_reason_code,
+    stepCount: skill.steps.length,
+    durationSeconds: skill.durationSeconds,
+  };
+}
+
+/** Полный цикл repeat/transfer/resize/replacement через trainerCommand. */
+async function runAdjustmentCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const makeUser = (tag: string) => ({
+    userId: `adjust-${tag}-${suffix}`,
+    displayName: `Adjustment ${tag}`,
+    email: `adjust-${tag}-${suffix}@example.invalid`,
+    fullName: null,
+  });
+  const command = (
+    user: ReturnType<typeof makeUser>,
+    sessionId: string,
+    body: Record<string, unknown>,
+  ) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+
+  // Пользователь A: first_try → failed → resize → failed → replace → done → repeat.
+  const userA = makeUser("a");
+  const sessionA = crypto.randomUUID();
+  await command(userA, sessionA, {
+    action: "onboard", name: "А", trainerId: "beck",
+    text: "Прокрастинация с рабочими задачами", consent: true,
+  });
+  const afterSituation = await command(userA, sessionA, {
+    action: "situation", mode: "stuck", kind: "stuck", signal: "thought",
+    urge: "avoid", intensity: 6, risk: "no",
+    text: "Не могу начать отчёт, откладываю уже неделю",
+  });
+  const firstPlan = afterSituation.plans[0];
+  const pseudonymA = afterSituation.profile?.pseudonym ?? "";
+  await command(userA, sessionA, { action: "start", planId: firstPlan.id });
+  await command(userA, sessionA, { action: "outcome", planId: firstPlan.id, result: "failed", helpfulness: 4 });
+  const afterResize = await command(userA, sessionA, { action: "resize", planId: firstPlan.id });
+  const resizedPlan = afterResize.plans[0];
+  await command(userA, sessionA, { action: "start", planId: resizedPlan.id });
+  await command(userA, sessionA, { action: "outcome", planId: resizedPlan.id, result: "failed", helpfulness: 3 });
+  const afterReplace = await command(userA, sessionA, { action: "replace", planId: resizedPlan.id });
+  const replacedPlan = afterReplace.plans[0];
+  await command(userA, sessionA, { action: "start", planId: replacedPlan.id });
+  await command(userA, sessionA, { action: "outcome", planId: replacedPlan.id, result: "done", helpfulness: 7 });
+  const afterRepeat = await command(userA, sessionA, {
+    action: "situation", mode: "stuck", kind: "stuck", signal: "thought",
+    urge: "distract", intensity: 5, risk: "no",
+    text: "Опять залипаю в телефон вместо отчёта",
+  });
+
+  // Пользователь B: transfer — доказательство из другого типа ситуации.
+  const userB = makeUser("b");
+  const sessionB = crypto.randomUUID();
+  await command(userB, sessionB, {
+    action: "onboard", name: "Б", trainerId: "marsha",
+    text: "Откладываю важные разговоры", consent: true,
+  });
+  await seedOutcome(db, userB.userId, "micro-start", "conflict", {
+    completed: true, helpfulness: 7, avoidance: false,
+  });
+  const afterTransfer = await command(userB, sessionB, {
+    action: "situation", mode: "stuck", kind: "stuck", signal: "thought",
+    urge: "avoid", intensity: 5, risk: "no",
+    text: "Снова не могу приступить к задаче",
+  });
+  const pseudonymB = afterTransfer.profile?.pseudonym ?? "";
+
+  // События корректировок и рекомендаций полны по реестру event-schema-v2.
+  const eventRows = await db
+    .prepare(
+      "SELECT event_name, payload_json FROM pilot_events WHERE user_id IN (?,?) AND event_name IN ('action_resized','action_replaced','skill_recommended')",
+    )
+    .bind(pseudonymA, pseudonymB)
+    .all<{ event_name: string; payload_json: string }>();
+  const eventsComplete = eventRows.results.length >= 5 && eventRows.results.every((row) =>
+    eventPayloadComplete(row.event_name, JSON.parse(row.payload_json)),
+  );
+
+  return {
+    firstTry: snapshotPlan(afterSituation.plans),
+    resized: snapshotPlan(afterResize.plans),
+    replaced: snapshotPlan(afterReplace.plans),
+    repeated: snapshotPlan(afterRepeat.plans),
+    transferred: snapshotPlan(afterTransfer.plans),
+    eventsComplete,
+  };
+}
+
 async function runPilotAnalytics(db: D1Database) {
   const suffix = crypto.randomUUID();
   const userId = `analytics-user-${suffix}`;
@@ -910,6 +1017,9 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/ai-fallback") {
       return Response.json(await runAiFallback(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/adjustment-cycle") {
+      return Response.json(await runAdjustmentCycle(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/outcome-idempotency") {
       return Response.json(await runOutcomeIdempotency(env.DB));

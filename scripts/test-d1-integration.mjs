@@ -456,8 +456,18 @@ try {
     fallbackMentionsBridge: true,
   });
 
+  const adjustment = await runEndpoint(baseUrl, "adjustment-cycle");
+  assert.deepEqual(adjustment, {
+    firstTry: { skillId: "micro-start", reasonCode: "first_try", stepCount: 3, durationSeconds: 120 },
+    resized: { skillId: "micro-start", reasonCode: "resize_after_failed", stepCount: 1, durationSeconds: 60 },
+    replaced: { skillId: "distract-delay", reasonCode: "replace_low_fit", stepCount: 3, durationSeconds: 120 },
+    repeated: { skillId: "distract-delay", reasonCode: "repeat_helpful", stepCount: 3, durationSeconds: 120 },
+    transferred: { skillId: "micro-start", reasonCode: "transfer_helpful", stepCount: 3, durationSeconds: 120 },
+    eventsComplete: true,
+  });
+
   console.log(
-    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution, export queue, Sheets mirror cycle with failure recovery, onboarding flow, outcome semantics, safety cycle, event completeness and AI fallback.",
+    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution, export queue, Sheets mirror cycle with failure recovery, onboarding flow, outcome semantics, safety cycle, event completeness, AI fallback and full resize/replace/repeat/transfer adjustment cycle.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");

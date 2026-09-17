@@ -199,7 +199,7 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 - [x] done/more/failed и раздельные completion/helpfulness (Round 5.1: D1 integration `/outcome-semantics` — done/more → completed=1 + helpfulness, failed → completed=0, статус attempted);
 - [x] duplicate request и повторный outcome (D1 integration, Rounds 1.2 и 2.8);
 - [x] safety escalation и возврат из safety flow (Round 5.1: D1 integration `/safety-cycle` — routing по тексту и risk-ответу, статичное safety-сообщение, снятие флага, события safety_flow_used/safety_check_completed);
-- [ ] repeat/transfer/resize/replacement;
+- [x] repeat/transfer/resize/replacement (Round 5.2: D1 integration `/adjustment-cycle` — полный цикл через trainerCommand: first_try → failed → resize (1 шаг, ≤60с) → failed → replace (другой навык трека) → done → repeat_helpful; transfer из другого типа ситуации; события action_resized/action_replaced/skill_recommended полны по реестру);
 - [x] смена персонажа и режима без потери данных (D1 integration, Round 2.7);
 - [x] analytics event completeness (Round 5.1: event-schema-v2, валидатор `eventPayloadComplete`, D1 integration `/event-completeness` — 8 событий против реестра из 32, контрпример отклонён);
 - [x] Sheets retry без влияния на API response (Round 3.2: D1 integration — «Google API 503» → failed + backoff, retry доставляет без дублей; экспорт отдельным процессом от пользовательского API);
