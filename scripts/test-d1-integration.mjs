@@ -143,6 +143,13 @@ async function runSheetsExport(baseUrl) {
   return body;
 }
 
+async function runEndpoint(baseUrl, name) {
+  const response = await fetch(`${baseUrl}/${name}`, { method: "POST" });
+  const body = await response.json();
+  assert.equal(response.status, 200, JSON.stringify(body));
+  return body;
+}
+
 async function runIdempotentRequest(baseUrl, requestId) {
   const response = await fetch(`${baseUrl}/idempotency`, {
     method: "POST",
@@ -398,8 +405,59 @@ try {
   assert.deepEqual(sheetsExport.fourth, { claimed: 1, sent: 1, failed: 0 });
   assert.equal(sheetsExport.myEventRowsFinal, 4, "retry доставил 4-е событие");
 
+  const onboarding = await runEndpoint(baseUrl, "onboarding-flow");
+  assert.deepEqual(onboarding, {
+    trainerId: "beck",
+    interactionMode: "explore",
+    eventNames: [
+      "onboarding_completed",
+      "onboarding_started",
+      "trainer_selected",
+      "trainer_viewed",
+    ],
+    allVersioned: true,
+    cohortKey: "2026-09-12:frozen-mvp-1.0",
+  });
+
+  const semantics = await runEndpoint(baseUrl, "outcome-semantics");
+  assert.deepEqual(semantics, {
+    runs: [
+      { result: "done", completed: 1, helpfulness: 7 },
+      { result: "more", completed: 1, helpfulness: 9 },
+      { result: "failed", completed: 0, helpfulness: 4 },
+    ],
+    attemptStatuses: ["completed", "completed", "attempted"],
+  });
+
+  const safety = await runEndpoint(baseUrl, "safety-cycle");
+  assert.deepEqual(safety, {
+    unsafeRoute: true,
+    safeRoute: true,
+    riskYesRoute: true,
+    safetyMessageIsStatic: true,
+    flagCleared: true,
+    eventNames: ["safety_flow_used", "safety_check_completed"],
+  });
+
+  const completeness = await runEndpoint(baseUrl, "event-completeness");
+  assert.deepEqual(completeness, {
+    writtenCount: 8,
+    allRegisteredAndComplete: true,
+    counterexampleRejected: true,
+    registrySize: 32,
+  });
+
+  const aiFallback = await runEndpoint(baseUrl, "ai-fallback");
+  assert.deepEqual(aiFallback, {
+    onTimeoutIsFallback: true,
+    onMalformedIsFallback: true,
+    onHostileIsFallback: true,
+    onValidPassThrough: true,
+    fallbackMentionsBridge: true,
+  });
+
   console.log(
-    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution, export queue and Sheets mirror cycle with failure recovery.",
+    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution, export queue, Sheets mirror cycle with failure recovery, onboarding flow, outcome semantics, safety cycle, event completeness and AI fallback.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");

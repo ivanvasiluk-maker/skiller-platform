@@ -13,19 +13,20 @@ import {
 } from "../lib/sheets-schema.ts";
 
 const event = {
-  id: "user-1:action_rated:req-1",
+  id: "user-1:helpfulness_rated:req-1",
   user_id: "pseudo-1",
   session_id: "session-1",
   trainer_id: "marsha",
   day_index: 3,
-  event_name: "action_rated",
+  event_name: "helpfulness_rated",
   payload_json: JSON.stringify({
     skill_id: "micro-start",
+    score: 8,
     helpfulness: 8,
     completed: true,
     decision_reason_code: "repeat_helpful",
     product_version: "frozen-mvp-1.0",
-    character_version: "1.0",
+    character_version: "1.1",
     skill_card_version: "1.0",
     text: "личный текст, который нельзя экспортировать",
   }),
@@ -42,14 +43,14 @@ test("event row matches EVENTS columns order and drops private text", async () =
     EVENTS_COLUMNS.map((column, index) => [column, row[index]]),
   );
   assert.deepEqual(asRecord, {
-    event_id: "user-1:action_rated:req-1",
+    event_id: "user-1:helpfulness_rated:req-1",
     created_at: "2026-09-14T09:00:00.000Z",
     cohort_key: "2026-09-10:frozen-mvp-1.0",
     user_id: "pseudo-1",
-    event_name: "action_rated",
+    event_name: "helpfulness_rated",
     day_index: 3,
     product_version: "frozen-mvp-1.0",
-    character_version: "1.0",
+    character_version: "1.1",
     skill_card_version: "1.0",
     skill_id: "micro-start",
     decision_reason_code: "repeat_helpful",

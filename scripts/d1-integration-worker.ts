@@ -14,6 +14,14 @@ import {
   recordPilotEvent,
 } from "../lib/pilot-events";
 import { skillCardVersion } from "../lib/skill-card-versions";
+import {
+  PILOT_EVENT_SPECS,
+  eventPayloadComplete,
+  isPilotEventName,
+} from "../lib/pilot-event-schema";
+import { requiresSafetyRoute, safetyMessage } from "../lib/trainers";
+import { produceFreeTalkReply } from "../lib/free-talk";
+import { buildFreeTalkFallback, getCharacterBible } from "../lib/character-bible";
 import { runSheetsExport } from "../lib/sheets-exporter";
 import { createInMemorySheets } from "../lib/in-memory-sheets";
 
@@ -261,7 +269,7 @@ async function runSettingsContinuity(db: D1Database) {
     ).bind(planId, userId, situationId, "{}", "Микростарт", "stuck", 6, 3, attemptId, "done", 8, "first_try", "outcome-policy-v2", profileCreatedAt),
     db.prepare(
       "INSERT INTO pilot_events (id,user_id,session_id,trainer_id,day_index,event_name,payload_json,product_version,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-    ).bind(historicalEventId, pseudonym, "history-session-" + suffix, "marsha", 2, "action_completed", '{"source":"before-settings"}', "test-v1", profileCreatedAt),
+    ).bind(historicalEventId, pseudonym, "history-session-" + suffix, "marsha", 2, "action_done", '{"source":"before-settings"}', "test-v1", profileCreatedAt),
   ]);
 
   const beforeDay = dayIndex(profileCreatedAt);
@@ -408,10 +416,10 @@ async function runSheetsExportCycle(db: D1Database) {
     sessionId: `sheets-session-${suffix}`,
     trainerId: "beck",
     dayIndex: 3,
-    eventName: "action_rated",
+    eventName: "helpfulness_rated",
     payload: {
       skill_id: "micro-start",
-      helpfulness: 8,
+      score: 8,
       completed: true,
       decision_reason_code: "first_try",
       entry_mode: "stuck",
@@ -505,6 +513,284 @@ async function runSheetsExportCycle(db: D1Database) {
 }
 
 type IdempotencyResponse = { requestId: string; mutationCount: number };
+
+/** Onboarding flow: события онбординга + сохранённый выбор тренера. */
+async function runOnboardingFlow(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const userId = `onboarding-user-${suffix}`;
+  const pseudonym = `pseudo-${suffix}`;
+  const now = "2026-09-12T10:00:00.000Z";
+  await db.batch([
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS trainer_profiles (user_id TEXT PRIMARY KEY, pseudonym TEXT NOT NULL UNIQUE, name TEXT NOT NULL, trainer_id TEXT NOT NULL, interaction_mode TEXT NOT NULL DEFAULT 'explore', main_problem TEXT NOT NULL, consent_version TEXT NOT NULL, created_at TEXT NOT NULL, last_interaction_at TEXT NOT NULL, safety_flag INTEGER NOT NULL DEFAULT 0)",
+    ),
+    db.prepare("INSERT INTO users (id,email,display_name) VALUES (?,?,?)").bind(userId, `${userId}@example.invalid`, "Onboarding Integration"),
+    db.prepare(
+      "INSERT INTO trainer_profiles (user_id,pseudonym,name,trainer_id,interaction_mode,main_problem,consent_version,created_at,last_interaction_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    ).bind(userId, pseudonym, "Onboarding Integration", "beck", "explore", "Прокрастинация", "test-v1", now, now),
+  ]);
+  for (const name of ["onboarding_started", "trainer_viewed", "trainer_selected", "onboarding_completed"]) {
+    await recordPilotEvent(db, {
+      id: `${pseudonym}:${name}:onboarding`,
+      userId: pseudonym,
+      sessionId: `onboarding-session-${suffix}`,
+      trainerId: "beck",
+      dayIndex: 1,
+      eventName: name,
+      payload: {},
+      skillCardVersion: null,
+      createdAt: now,
+    });
+  }
+  const profile = await db
+    .prepare("SELECT trainer_id, interaction_mode FROM trainer_profiles WHERE user_id=?")
+    .bind(userId)
+    .first<{ trainer_id: string; interaction_mode: string }>();
+  const events = await db
+    .prepare("SELECT event_name, payload_json FROM pilot_events WHERE user_id=? ORDER BY created_at, id")
+    .bind(pseudonym)
+    .all<{ event_name: string; payload_json: string }>();
+  const cohort = await db
+    .prepare("SELECT cohort_key FROM cohort_members WHERE user_id=?")
+    .bind(pseudonym)
+    .first<{ cohort_key: string }>();
+  return {
+    trainerId: profile?.trainer_id ?? null,
+    interactionMode: profile?.interaction_mode ?? null,
+    eventNames: events.results.map((row) => row.event_name),
+    allVersioned: events.results.every((row) => {
+      const payload = JSON.parse(row.payload_json);
+      return payload.product_version === "frozen-mvp-1.0" && payload.character_version === "1.1";
+    }),
+    cohortKey: cohort?.cohort_key ?? null,
+  };
+}
+
+/** Раздельные completion/helpfulness для done, more и failed. */
+async function runOutcomeSemantics(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const runs: { result: string; completed: number; helpfulness: number }[] = [];
+  const attemptStatuses: string[] = [];
+  for (const [index, [result, completed, helpfulness]] of ([
+    ["done", 1, 7],
+    ["more", 1, 9],
+    ["failed", 0, 4],
+  ] as const).entries()) {
+    const runUserId = `semantics-${suffix}-${index}`;
+    const situationId = `sem-situation-${suffix}-${index}`;
+    const attemptId = `sem-attempt-${suffix}-${index}`;
+    await db.batch([
+      db.prepare("INSERT INTO users (id,email,display_name) VALUES (?,?,?)").bind(runUserId, `${runUserId}@example.invalid`, "Semantics"),
+      db.prepare("INSERT OR IGNORE INTO skills (id,title,approach,track,description,why,steps_json,duration_seconds) VALUES (?,?,?,?,?,?,?,?)")
+        .bind("micro-start", "Микростарт", "behavioral", "action", "Первый маленький шаг", "Снижает порог входа", "[]", 60),
+      db.prepare("INSERT INTO situations (id,user_id,kind,intensity,safety_status) VALUES (?,?,?,?,?)").bind(situationId, runUserId, "stuck", 5, "self-guided"),
+      db.prepare("INSERT INTO skill_attempts (id,user_id,situation_id,skill_id,mode,status) VALUES (?,?,?,?,?,?)").bind(attemptId, runUserId, situationId, "micro-start", "guided", "started"),
+    ]);
+    await completeAttempt(
+      { userId: runUserId, displayName: "Semantics", email: `${runUserId}@example.invalid`, fullName: null },
+      {
+        attemptId,
+        completed: completed === 1,
+        reliefDelta: 1,
+        goalProgress: result === "more" ? 10 : result === "done" ? 5 : 0,
+        helpfulness,
+        avoidance: false,
+      },
+    );
+    const outcome = await db
+      .prepare("SELECT completed, helpfulness FROM outcomes WHERE attempt_id=?")
+      .bind(attemptId)
+      .first<{ completed: number; helpfulness: number }>();
+    const attempt = await db
+      .prepare("SELECT status FROM skill_attempts WHERE id=?")
+      .bind(attemptId)
+      .first<{ status: string }>();
+    runs.push({
+      result,
+      completed: Number(outcome?.completed ?? -1),
+      helpfulness: Number(outcome?.helpfulness ?? -1),
+    });
+    attemptStatuses.push(attempt?.status ?? "missing");
+  }
+  return { runs, attemptStatuses };
+}
+
+/** Safety escalation и возврат из safety flow. */
+async function runSafetyCycle(db: D1Database) {
+  const unsafeTexts = [
+    "хочу покончить с собой",
+    "мысли о суициде не дают спать",
+    "не хочу жить",
+  ];
+  const unsafeRoute = unsafeTexts.every((text) => requiresSafetyRoute(text, "unknown"));
+  const safeRoute = !requiresSafetyRoute("устал от дедлайна на работе", "no");
+  const riskYesRoute = requiresSafetyRoute("обычный стресс", "yes");
+
+  const suffix = crypto.randomUUID();
+  const userId = `safety-user-${suffix}`;
+  const pseudonym = `safety-pseudo-${suffix}`;
+  const now = "2026-09-12T10:00:00.000Z";
+  await db.batch([
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS trainer_profiles (user_id TEXT PRIMARY KEY, pseudonym TEXT NOT NULL UNIQUE, name TEXT NOT NULL, trainer_id TEXT NOT NULL, interaction_mode TEXT NOT NULL DEFAULT 'explore', main_problem TEXT NOT NULL, consent_version TEXT NOT NULL, created_at TEXT NOT NULL, last_interaction_at TEXT NOT NULL, safety_flag INTEGER NOT NULL DEFAULT 0)",
+    ),
+    db.prepare("INSERT INTO users (id,email,display_name) VALUES (?,?,?)").bind(userId, `${userId}@example.invalid`, "Safety Integration"),
+    db.prepare(
+      "INSERT INTO trainer_profiles (user_id,pseudonym,name,trainer_id,main_problem,consent_version,created_at,last_interaction_at,safety_flag) VALUES (?,?,?,?,?,?,?,?,1)",
+    ).bind(userId, pseudonym, "Safety Integration", "marsha", "Стресс", "test-v1", now, now),
+  ]);
+  await recordPilotEvent(db, {
+    id: `${pseudonym}:safety_flow_used:${suffix}`,
+    userId: pseudonym,
+    sessionId: `safety-session-${suffix}`,
+    trainerId: "marsha",
+    dayIndex: 1,
+    eventName: "safety_flow_used",
+    payload: {},
+    skillCardVersion: null,
+    createdAt: now,
+  });
+  // Возврат из safety flow: подтверждение отсутствия опасности снимает флаг.
+  await db.prepare("UPDATE trainer_profiles SET safety_flag=0 WHERE user_id=?").bind(userId).run();
+  await recordPilotEvent(db, {
+    id: `${pseudonym}:safety_check_completed:${suffix}`,
+    userId: pseudonym,
+    sessionId: `safety-session-${suffix}`,
+    trainerId: "marsha",
+    dayIndex: 1,
+    eventName: "safety_check_completed",
+    payload: {},
+    skillCardVersion: null,
+    createdAt: "2026-09-12T10:05:00.000Z",
+  });
+  const profile = await db
+    .prepare("SELECT safety_flag FROM trainer_profiles WHERE user_id=?")
+    .bind(userId)
+    .first<{ safety_flag: number }>();
+  const events = await db
+    .prepare("SELECT event_name FROM pilot_events WHERE user_id=? ORDER BY created_at, id")
+    .bind(pseudonym)
+    .all<{ event_name: string }>();
+  return {
+    unsafeRoute,
+    safeRoute,
+    riskYesRoute,
+    safetyMessageIsStatic: typeof safetyMessage === "string" && safetyMessage.includes("экстренной"),
+    flagCleared: Number(profile?.safety_flag ?? 1) === 0,
+    eventNames: events.results.map((row) => row.event_name),
+  };
+}
+
+/** Полнота аналитических событий против реестра event-schema-v2. */
+async function runEventCompleteness(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const userId = `audit-user-${suffix}`;
+  const base = { userId, sessionId: `audit-session-${suffix}`, trainerId: "beck" as const };
+  const cases: { name: string; payload: Record<string, string | number | boolean>; keySuffix: string }[] = [
+    { name: "skill_recommended", payload: { skill_id: "micro-start", decision_reason_code: "first_try" }, keySuffix: "rec" },
+    { name: "action_started", payload: { skill_id: "micro-start" }, keySuffix: "start" },
+    { name: "action_done", payload: { skill_id: "micro-start", outcome: "done" }, keySuffix: "done" },
+    { name: "action_failed", payload: { skill_id: "micro-start", outcome: "failed" }, keySuffix: "failed" },
+    { name: "helpfulness_rated", payload: { skill_id: "micro-start", score: 7 }, keySuffix: "rated" },
+    { name: "action_resized", payload: { skill_id: "micro-start", decision_reason_code: "resize_after_failed" }, keySuffix: "resized" },
+    { name: "action_replaced", payload: { skill_id: "distract-delay", decision_reason_code: "replace_low_fit" }, keySuffix: "replaced" },
+    { name: "feedback_submitted", payload: { helpfulness: 8, understood: 9, continue_intent: 7 }, keySuffix: "feedback" },
+  ];
+  for (const item of cases) {
+    await recordPilotEvent(db, {
+      ...base,
+      id: `audit-${item.keySuffix}-${suffix}`,
+      dayIndex: 1,
+      eventName: item.name,
+      payload: item.payload,
+      skillCardVersion: typeof item.payload.skill_id === "string" ? skillCardVersion(item.payload.skill_id) : null,
+      createdAt: "2026-09-12T11:00:00.000Z",
+    });
+  }
+  const rows = await db
+    .prepare("SELECT event_name, payload_json FROM pilot_events WHERE user_id=?")
+    .bind(userId)
+    .all<{ event_name: string; payload_json: string }>();
+  const complete = rows.results.every((row) =>
+    isPilotEventName(row.event_name) &&
+    eventPayloadComplete(row.event_name, JSON.parse(row.payload_json)),
+  );
+  // Контрпример: неполный payload не проходит проверку реестра.
+  const counterexampleRejected = !eventPayloadComplete("helpfulness_rated", { skill_id: "micro-start" });
+  const registrySize = PILOT_EVENT_SPECS.length;
+  return {
+    writtenCount: rows.results.length,
+    allRegisteredAndComplete: complete,
+    counterexampleRejected,
+    registrySize,
+  };
+}
+
+/** AI timeout / malformed output → deterministic fallback без потери flow. */
+async function runAiFallback(db: D1Database) {
+  void db;
+  const profile = { trainer_id: "marsha" as const, interaction_mode: "explore" as const };
+  const messages = [{ role: "user" as const, text: "Мне тревожно и я не понимаю, с чего начать." }];
+  const bible = getCharacterBible("marsha");
+  const expectedFallback = buildFreeTalkFallback(bible);
+  // Таймаут: fetch бросает → fallback.
+  const onTimeout = await produceFreeTalkReply({
+    profile,
+    messages,
+    apiKey: "test-key",
+    model: "test-model",
+    fetchImpl: () => {
+      throw new Error("The operation timed out.");
+    },
+  });
+  // Malformed JSON в output_text → fallback.
+  const malformed = new Response(
+    JSON.stringify({ output: [{ content: [{ type: "output_text", text: "{not-json" }] }] }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+  const onMalformed = await produceFreeTalkReply({
+    profile,
+    messages,
+    apiKey: "test-key",
+    model: "test-model",
+    fetchImpl: () => Promise.resolve(malformed),
+  });
+  // Запрещённый контент (зависимость) → guard → fallback.
+  const hostile = new Response(
+    JSON.stringify({
+      output: [{ content: [{ type: "output_text", text: JSON.stringify({ reply: "Я всегда буду рядом с тобой. Обращайся в любое время, без меня будет сложно. Какой шаг выберем?" }) }] }],
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+  const onHostile = await produceFreeTalkReply({
+    profile,
+    messages,
+    apiKey: "test-key",
+    model: "test-model",
+    fetchImpl: () => Promise.resolve(hostile),
+  });
+  // Валидный ответ проходит без fallback.
+  const valid = new Response(
+    JSON.stringify({
+      output: [{ content: [{ type: "output_text", text: JSON.stringify({ reply: "Понимаю, это сейчас давит. Давай выберем один маленький шаг — что из этого по силам?" }) }] }],
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+  const onValid = await produceFreeTalkReply({
+    profile,
+    messages,
+    apiKey: "test-key",
+    model: "test-model",
+    fetchImpl: () => Promise.resolve(valid),
+  });
+  return {
+    onTimeoutIsFallback: onTimeout === expectedFallback,
+    onMalformedIsFallback: onMalformed === expectedFallback,
+    onHostileIsFallback: onHostile === expectedFallback,
+    onValidPassThrough: onValid.startsWith("Понимаю"),
+    fallbackMentionsBridge: onTimeout.includes("действие"),
+  };
+}
 
 async function runPilotAnalytics(db: D1Database) {
   const suffix = crypto.randomUUID();
@@ -609,6 +895,21 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/sheets-export") {
       return Response.json(await runSheetsExportCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/onboarding-flow") {
+      return Response.json(await runOnboardingFlow(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/outcome-semantics") {
+      return Response.json(await runOutcomeSemantics(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/safety-cycle") {
+      return Response.json(await runSafetyCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/event-completeness") {
+      return Response.json(await runEventCompleteness(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/ai-fallback") {
+      return Response.json(await runAiFallback(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/outcome-idempotency") {
       return Response.json(await runOutcomeIdempotency(env.DB));

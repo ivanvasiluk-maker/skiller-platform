@@ -195,15 +195,15 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 
 ### Integration tests
 
-- [ ] onboarding и сохранение выбора тренера;
-- [ ] done/more/failed и раздельные completion/helpfulness;
+- [x] onboarding и сохранение выбора тренера (Round 5.1: D1 integration `/onboarding-flow` — 4 события онбординга версионированы, trainer/mode в профиле, когорта приписана);
+- [x] done/more/failed и раздельные completion/helpfulness (Round 5.1: D1 integration `/outcome-semantics` — done/more → completed=1 + helpfulness, failed → completed=0, статус attempted);
 - [x] duplicate request и повторный outcome (D1 integration, Rounds 1.2 и 2.8);
-- [ ] safety escalation и возврат из safety flow;
+- [x] safety escalation и возврат из safety flow (Round 5.1: D1 integration `/safety-cycle` — routing по тексту и risk-ответу, статичное safety-сообщение, снятие флага, события safety_flow_used/safety_check_completed);
 - [ ] repeat/transfer/resize/replacement;
 - [x] смена персонажа и режима без потери данных (D1 integration, Round 2.7);
-- [ ] analytics event completeness;
+- [x] analytics event completeness (Round 5.1: event-schema-v2, валидатор `eventPayloadComplete`, D1 integration `/event-completeness` — 8 событий против реестра из 32, контрпример отклонён);
 - [x] Sheets retry без влияния на API response (Round 3.2: D1 integration — «Google API 503» → failed + backoff, retry доставляет без дублей; экспорт отдельным процессом от пользовательского API);
-- [ ] AI timeout, malformed output и deterministic fallback (unit-покрытие guard/fallback есть в Round 4.1; нужен интеграционный сценарий с имитацией ответа API).
+- [x] AI timeout, malformed output и deterministic fallback (Round 5.1: `lib/free-talk.ts` с инъецируемым fetch, D1 integration `/ai-fallback` — timeout/malformed/hostile → fallback из Bible, валидный ответ проходит).
 
 ### E2E Day 1–7
 

@@ -5,12 +5,12 @@ import type { ChatGPTUser } from "@/app/chatgpt-auth";
 import { ensureUser, recommendSkill, startAttempt, completeAttempt, completeOnboarding, loadDashboard, type SkillView } from "@/lib/skiller-data";
 import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-idempotency";
 import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-continuity";
-import { buildFreeTalkFallback, buildFreeTalkInstructions, getCharacterBible, validateTrainerReply } from "@/lib/character-bible";
+import { produceFreeTalkReply } from "@/lib/free-talk";
 import type { OutcomeReasonCode } from "@/lib/outcome-policy";
 import { recordPilotEvent, type PilotEventPayload } from "@/lib/pilot-events";
 import { skillCardVersion } from "@/lib/skill-card-versions";
 import { persistTrainerSettings } from "@/lib/trainer-settings";
-import { trainers, interactionModes, PRODUCT_VERSION, dayIndex, requiresSafetyRoute, safetyMessage, buildRecap, type TrainerId, type InteractionMode } from "@/lib/trainers";
+import { trainers, PRODUCT_VERSION, dayIndex, requiresSafetyRoute, safetyMessage, buildRecap, type TrainerId, type InteractionMode } from "@/lib/trainers";
 
 export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
 export type TrainerMessage = { id: string; role: "user" | "assistant"; text: string; trainer_id: TrainerId; created_at: string };
@@ -264,27 +264,10 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
 }
 
 async function freeTalk(profile: TrainerProfile, messages: TrainerMessage[]): Promise<string> {
-  const bible = getCharacterBible(profile.trainer_id);
-  const fallback = buildFreeTalkFallback(bible);
-  const apiKey = process.env.OPENAI_API_KEY || env.OPENAI_API_KEY;
-  if (!apiKey || process.env.SKILLER_AI_DISABLED === "1") return fallback;
-  try {
-    const response = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST", signal: AbortSignal.timeout(12000),
-      headers: { authorization: `Bearer ${apiKey}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: process.env.OPENAI_MODEL || env.OPENAI_MODEL || "gpt-4.1-mini", store: false, max_output_tokens: 450,
-        instructions: buildFreeTalkInstructions(bible, interactionModes[profile.interaction_mode]),
-        input: messages.map(m => ({ role: m.role, content: m.text })),
-        text: { format: { type: "json_schema", name: "trainer_reply", strict: true, schema: { type: "object", additionalProperties: false, properties: { reply: { type: "string" } }, required: ["reply"] } } },
-      }),
-    });
-    if (!response.ok) return fallback;
-    const data = await response.json() as { output?: { content?: { type?: string; text?: string }[] }[] };
-    const output = data.output?.flatMap(o => o.content ?? []).find(c => c.type === "output_text")?.text;
-    const parsed = z.object({ reply: z.string().min(1).max(1600) }).strict().safeParse(output ? JSON.parse(output) : null);
-    if (!parsed.success) return fallback;
-    // Пост-проверка лимитов и клинических запретов: нарушение → deterministic fallback.
-    const verdict = validateTrainerReply(parsed.data.reply);
-    return verdict.ok ? parsed.data.reply : fallback;
-  } catch { return fallback; }
+  return produceFreeTalkReply({
+    profile,
+    messages,
+    apiKey: process.env.OPENAI_API_KEY || env.OPENAI_API_KEY || "",
+    model: process.env.OPENAI_MODEL || env.OPENAI_MODEL || "gpt-4.1-mini",
+  });
 }

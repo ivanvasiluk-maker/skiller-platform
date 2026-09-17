@@ -3,7 +3,7 @@
 // lib/trainer-settings.ts. Новые события должны добавляться сюда до записи в D1,
 // чтобы schema оставалась единственным реестром обязательных событий пилота.
 
-export const EVENT_SCHEMA_VERSION = "event-schema-v1";
+export const EVENT_SCHEMA_VERSION = "event-schema-v2";
 
 export type PilotEventSpec = {
   name: string;
@@ -22,17 +22,22 @@ export const PILOT_EVENT_SPECS: readonly PilotEventSpec[] = [
   { name: "chat_started", description: "Начат диалог с тренером", requiredPayloadKeys: [] },
   { name: "free_talk_started", description: "Начат Free Talk", requiredPayloadKeys: [] },
   { name: "distress_flow_started", description: "Пользователь вошёл через режим distress", requiredPayloadKeys: [] },
+  { name: "distress_flow_completed", description: "Distress-практика завершена с замером интенсивности", requiredPayloadKeys: ["skill_id"] },
   { name: "safety_flow_used", description: "Сработал safety route", requiredPayloadKeys: [] },
   { name: "safety_check_completed", description: "Пользователь подтвердил отсутствие опасности", requiredPayloadKeys: [] },
-  { name: "situation_confirmed", description: "Ситуация разобрана и подтверждена", requiredPayloadKeys: [] },
-  { name: "skill_recommended", description: "Skill Engine выдал рекомендацию", requiredPayloadKeys: ["skill_id"] },
+  { name: "situation_submitted", description: "Ситуация отправлена на разбор", requiredPayloadKeys: [] },
+  { name: "mechanism_generated", description: "AI выдал разбор поведенческой цепочки", requiredPayloadKeys: [] },
+  { name: "skill_recommended", description: "Skill Engine выдал рекомендацию", requiredPayloadKeys: ["skill_id", "decision_reason_code"] },
   { name: "action_started", description: "Пользователь начал микро-действие", requiredPayloadKeys: ["skill_id"] },
-  { name: "action_completed", description: "Действие выполнено", requiredPayloadKeys: ["skill_id"] },
-  { name: "action_rated", description: "Получена оценка результата", requiredPayloadKeys: ["skill_id", "helpfulness"] },
-  { name: "action_failed_honest", description: "Честно отмечен невыполненный шаг", requiredPayloadKeys: ["skill_id"] },
-  { name: "resize_accepted", description: "Пользователь принял уменьшенный шаг", requiredPayloadKeys: ["skill_id"] },
-  { name: "replacement_accepted", description: "Пользователь принял замену навыка", requiredPayloadKeys: ["skill_id"] },
-  { name: "recap_shown", description: "Показан recap Day 3/7", requiredPayloadKeys: ["recap_day"] },
+  { name: "action_done", description: "Действие выполнено или сделано больше запланированного", requiredPayloadKeys: ["skill_id", "outcome"] },
+  { name: "action_failed", description: "Честно отмечен невыполненный шаг", requiredPayloadKeys: ["skill_id", "outcome"] },
+  { name: "helpfulness_rated", description: "Получена оценка полезности результата", requiredPayloadKeys: ["skill_id", "score"] },
+  { name: "action_resized", description: "Пользователь принял уменьшенный шаг", requiredPayloadKeys: ["skill_id", "decision_reason_code"] },
+  { name: "action_replaced", description: "Пользователь принял замену навыка", requiredPayloadKeys: ["skill_id", "decision_reason_code"] },
+  { name: "day_completed", description: "День завершён зафиксированным результатом", requiredPayloadKeys: ["skill_id"] },
+  { name: "training_completed", description: "Практика в режиме training завершена", requiredPayloadKeys: ["skill_id"] },
+  { name: "recap_3d_viewed", description: "Показан recap Day 3", requiredPayloadKeys: [] },
+  { name: "recap_7d_viewed", description: "Показан recap Day 7", requiredPayloadKeys: [] },
   { name: "engaged_return", description: "Возврат с взаимодействием в день N", requiredPayloadKeys: [] },
   { name: "return_D2", description: "Engaged возврат на Day 2", requiredPayloadKeys: [] },
   { name: "return_D3", description: "Engaged возврат на Day 3", requiredPayloadKeys: [] },
@@ -46,6 +51,22 @@ const specByName = new Map(PILOT_EVENT_SPECS.map((spec) => [spec.name, spec]));
 
 export function isPilotEventName(name: string): boolean {
   return specByName.has(name);
+}
+
+/**
+ * Проверяет, что payload события содержит все обязательные ключи реестра.
+ * Пустой набор обязательных ключей трактуется как валидный — само имя события
+ * уже проверено вызовом isPilotEventName.
+ */
+export function eventPayloadComplete(
+  name: string,
+  payload: Record<string, unknown>,
+): boolean {
+  const spec = specByName.get(name);
+  if (!spec) return false;
+  return spec.requiredPayloadKeys.every(
+    (key) => payload[key] !== undefined && payload[key] !== null,
+  );
 }
 
 /** Ключи payload, которые никогда не экспортируются в Sheets (приватность). */

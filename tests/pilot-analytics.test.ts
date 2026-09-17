@@ -10,6 +10,7 @@ import {
 } from "../lib/export-queue.ts";
 import {
   PILOT_EVENT_SPECS,
+  eventPayloadComplete,
   isPilotEventName,
   exportablePayloadKeys,
   EVENT_SCHEMA_VERSION,
@@ -72,29 +73,42 @@ test("pilot event schema covers all Frozen Spec events with required payload key
     "onboarding_started",
     "onboarding_completed",
     "trainer_selected",
+    "situation_submitted",
     "skill_recommended",
     "action_started",
-    "action_completed",
-    "action_rated",
-    "action_failed_honest",
-    "resize_accepted",
-    "replacement_accepted",
+    "action_done",
+    "action_failed",
+    "helpfulness_rated",
+    "action_resized",
+    "action_replaced",
+    "day_completed",
     "engaged_return",
     "return_D2",
     "return_D3",
     "return_D7",
-    "recap_shown",
+    "recap_3d_viewed",
+    "recap_7d_viewed",
     "feedback_submitted",
     "safety_flow_used",
+    "safety_check_completed",
     "trainer_changed",
     "interaction_mode_changed",
   ]) {
     assert.ok(names.includes(required), `missing event in schema: ${required}`);
   }
-  assert.ok(isPilotEventName("action_completed"));
+  assert.ok(isPilotEventName("action_done"));
   assert.ok(!isPilotEventName("unknown_event"));
   assert.equal(new Set(names).size, names.length, "event names must be unique");
   assert.ok(EVENT_SCHEMA_VERSION.startsWith("event-schema-"));
 
-  assert.deepEqual(exportablePayloadKeys("action_rated"), ["skill_id", "helpfulness"]);
+  assert.deepEqual(exportablePayloadKeys("helpfulness_rated"), ["skill_id", "score"]);
+});
+
+test("event payload completeness is checked against registry required keys", () => {
+  assert.ok(eventPayloadComplete("action_done", { skill_id: "micro-start", outcome: "done" }));
+  assert.ok(!eventPayloadComplete("action_done", { skill_id: "micro-start" }), "missing outcome");
+  assert.ok(!eventPayloadComplete("action_done", { outcome: "done" }), "missing skill_id");
+  assert.ok(!eventPayloadComplete("action_done", { skill_id: null, outcome: "done" }), "null skill_id");
+  assert.ok(eventPayloadComplete("app_open", {}), "no required keys");
+  assert.ok(!eventPayloadComplete("unknown_event", {}), "unknown events rejected");
 });

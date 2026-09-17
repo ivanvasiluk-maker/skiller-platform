@@ -83,9 +83,9 @@ export async function buildSnapshotRows(db: D1Database): Promise<{
     .prepare(
       `SELECT e.user_id, e.day_index,
               COUNT(DISTINCT CASE WHEN e.event_name = 'action_started' THEN e.id END) AS started,
-              COUNT(DISTINCT CASE WHEN e.event_name IN ('action_completed','action_rated') THEN e.id END) AS completed
+              COUNT(DISTINCT CASE WHEN e.event_name IN ('action_done','helpfulness_rated') THEN e.id END) AS completed
        FROM pilot_events e
-       WHERE e.event_name IN ('action_started','action_completed','action_rated')
+       WHERE e.event_name IN ('action_started','action_done','helpfulness_rated')
        GROUP BY e.user_id, e.day_index`,
     )
     .all<{ user_id: string; day_index: number; started: number; completed: number }>();
@@ -113,7 +113,7 @@ export async function buildSnapshotRows(db: D1Database): Promise<{
               COUNT(DISTINCT CASE WHEN e.day_index = 3 AND e.event_name = 'engaged_return' THEN e.user_id END) AS d3,
               COUNT(DISTINCT CASE WHEN e.day_index = 7 AND e.event_name = 'engaged_return' THEN e.user_id END) AS d7,
               COUNT(DISTINCT CASE WHEN e.event_name = 'action_started' THEN e.id END) AS started,
-              COUNT(DISTINCT CASE WHEN e.event_name IN ('action_completed','action_rated') THEN e.id END) AS completed
+              COUNT(DISTINCT CASE WHEN e.event_name IN ('action_done','helpfulness_rated') THEN e.id END) AS completed
        FROM cohort_members m
        JOIN cohorts c ON c.key = m.cohort_key
        LEFT JOIN pilot_events e ON e.user_id = m.user_id
