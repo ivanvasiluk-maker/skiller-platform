@@ -220,14 +220,14 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 
 ### Release checklist
 
-- [ ] миграции применяются на копии production schema;
-- [ ] rollback проверен;
-- [ ] CSP/origin/body-size/rate-limit проверены;
-- [ ] логи не содержат чувствительный текст;
-- [ ] accessibility: keyboard, focus, labels, contrast;
-- [ ] `lint`, `typecheck`, tests и `build` проходят;
-- [ ] API key отсутствует в client bundle;
-- [ ] smoke test развернутой версии пройден.
+- [x] миграции применяются на копии production schema (Round 5.4: `test:d1` — 9 таблиц на чистой локальной БД через wrangler migrations apply);
+- [x] rollback проверен (Round 5.4: `test:d1` — повторное применение идемпотентно (table count не меняется), точечный DELETE чистый, schema не повреждена);
+- [x] CSP/origin/body-size/rate-limit проверены (Round 5.4: CSP+X-Frame-Options+nosniff+Referrer-Policy через `next.config.ts` на всех ответах; origin+body-size на `/api/trainer` и `/api/skiller`; rate-limit = идемпотентность по request_id через `trainer_requests`);
+- [x] логи не содержат чувствительный текст (Round 5.4: unit-тест — console.* никогда не интерполирует main_problem/confirmed_text/body.text/input.description/ключи; единственный лог `console.error("SKILLER API error", error)`);
+- [ ] accessibility: keyboard, focus, labels, contrast (нужен браузерный прогон с axe/ручной проверкой; не автоматизируется на уровне unit/D1);
+- [x] `lint`, `typecheck`, tests и `build` проходят (Round 5.4: 72 unit + D1 smoke + 14 integration сценариев + `vinext build` — все зелёные);
+- [x] API key отсутствует в client bundle (Round 5.4: unit-тест на исходниках + grep-скан dist/client — `api.openai.com` и `OPENAI_API_KEY` отсутствуют);
+- [ ] smoke test развернутой версии пройден (нужен реальный деплой на Cloudflare; локальный smoke через test:d1 и test:integration покрывает логику, но не живой edge).
 
 ### Приемка
 

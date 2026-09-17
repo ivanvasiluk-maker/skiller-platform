@@ -7,6 +7,9 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "Требуется вход" }, { status: 401 });
+  // Тот же контур защиты, что в trainer route: origin и верхний предел тела.
+  if (request.headers.get("origin") && new URL(request.headers.get("origin")!).origin !== new URL(request.url).origin) return Response.json({ error: "Недопустимый источник" }, { status: 403 });
+  if (Number(request.headers.get("content-length") ?? 0) > 5_000_000) return Response.json({ error: "Слишком большой запрос" }, { status: 413 });
 
   try {
     const contentType = request.headers.get("content-type") ?? "";

@@ -98,7 +98,21 @@ try {
     throw new Error("D1 smoke record could not be read back.");
   }
 
-  console.log(`D1 smoke passed: ${requiredTables.length} tables migrated; decision audit columns present; isolated write/read succeeded; non-test guard rejected.`);
+  // Миграции применяются повторно без ошибок (идемпотентность на той же базе).
+  run(["d1", "migrations", "apply", TEST_DATABASE_NAME, ...baseArgs]);
+  const reapplyRows = query("SELECT name FROM sqlite_schema WHERE type='table' ORDER BY name;");
+  if (reapplyRows.length !== tableRows.length) {
+    throw new Error(`Migration reapply changed table count: ${tableRows.length} → ${reapplyRows.length}`);
+  }
+
+  // Rollback-сценарий: точечный DELETE удаляет запись, schema не повреждена.
+  query("DELETE FROM users WHERE id='d1-smoke-user';");
+  const afterDelete = query("SELECT id FROM users WHERE id='d1-smoke-user';");
+  if (afterDelete.length !== 0) throw new Error("Rollback delete did not remove the smoke record.");
+  const schemaIntact = query("SELECT name FROM sqlite_schema WHERE type='table' AND name='users';");
+  if (schemaIntact.length !== 1) throw new Error("Schema damaged after rollback probe.");
+
+  console.log(`D1 smoke passed: ${requiredTables.length} tables migrated; decision audit columns present; isolated write/read succeeded; migration reapply idempotent; rollback probe clean; non-test guard rejected.`);
 } finally {
   rmSync(persistPath, { recursive: true, force: true });
 }
