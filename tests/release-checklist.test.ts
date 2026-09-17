@@ -18,17 +18,6 @@ function* walk(dir: string): Generator<string> {
   }
 }
 
-// Ключи payload, которые никогда не должны попадать в логи или экспорт.
-const SENSITIVE_MARKERS = [
-  "main_problem",
-  "confirmed_text",
-  "description",
-  "text:",
-  "note:",
-  "helped:",
-  "annoyed:",
-];
-
 test("production logging never interpolates raw user text or secrets", () => {
   for (const file of walk(root)) {
     const content = readFileSync(file, "utf8");

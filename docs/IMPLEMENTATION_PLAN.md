@@ -65,8 +65,8 @@
 
 ### Задачи
 
-- [ ] Добавить scripts `typecheck`, `test:core`, `test:integration`, `test:e2e`, `verify` в `package.json`.
-- [ ] Настроить CI: install → lint → typecheck → unit/integration → build.
+- [x] Добавить scripts `typecheck`, `test:core`, `test:integration`, `test:e2e`, `verify` в `package.json` (Round 5.5: `test:e2e` = полный интеграционный прогон `/week-cycle` Day 1–7 через `test:integration`).
+- [x] Настроить CI: install → lint → typecheck → unit/integration → build (`.github/workflows/verify.yml` — Node 22 + Python 3.12, npm ci, lint, typecheck, test:core, test:d1, test:integration, build на каждый push в main).
 - [x] Создать отдельную тестовую D1-базу и тестовые bindings.
 - [x] Зафиксировать `PRODUCT_VERSION`, `CHARACTER_VERSION`, версии skill cards во всех обязательных событиях (Round 0.1 Event Versions).
 - [x] Добавить seed/reset только для тестовой среды.
