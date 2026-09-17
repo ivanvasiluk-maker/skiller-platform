@@ -22,6 +22,8 @@
     "pilot:metrics": "node scripts/pilot-metrics.mjs",
     "pilot:reconcile": "node scripts/pilot-metrics.mjs --reconcile",
     "verify": "npm run lint && npm run typecheck && npm run test:core && npm run test:d1 && npm run test:integration && npm run build",
+    "deploy:check": "node scripts/deploy.mjs check",
+    "deploy": "node scripts/deploy.mjs deploy",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {
