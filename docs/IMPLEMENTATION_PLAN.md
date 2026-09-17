@@ -207,16 +207,16 @@ Primary storage — D1. Google Sheets — только псевдонимизи�
 
 ### E2E Day 1–7
 
-- [ ] новый пользователь проходит onboarding;
-- [ ] Day 1 выполняет или не выполняет действие;
-- [ ] reload и restart сохраняют состояние;
-- [ ] Day 2 видит continuity;
-- [ ] Day 3 получает grounded recap;
-- [ ] Days 4–6 проходят repeat/transfer/replacement;
-- [ ] Day 7 получает недельный recap и feedback;
-- [ ] смена персонажа не теряет progress;
-- [ ] сценарий проходит при отключенном OpenAI;
-- [ ] mobile и desktop не имеют перекрытий и недоступных действий.
+- [x] новый пользователь проходит onboarding (Round 5.3: D1 integration `/week-cycle` — onboard + 4 события онбординга);
+- [x] Day 1 выполняет или не выполняет действие (Round 5.3: situation → start → outcome done, план first_try);
+- [x] reload и restart сохраняют состояние (Round 5.3: повторные open — планы/сообщения стабильны, day=1);
+- [x] Day 2 видит continuity (Round 5.3: `continuity.lastOutcome` указывает на план Day 1, return_D2 записан);
+- [x] Day 3 получает grounded recap (Round 5.3: recap Day 3 цитирует «полезность 7/10» точно, recap_3d_viewed);
+- [x] Days 4–6 проходят repeat/transfer/replacement (Round 5.3: Day 4 repeat_helpful, Day 5 transfer_helpful из конфликтного контекста, Day 6 replace_low_fit с новым планом);
+- [x] Day 7 получает недельный recap и feedback (Round 5.3: recap_7d_viewed, feedback_submitted + строка pilot_feedback);
+- [x] смена персонажа не теряет progress (Round 5.3: settings → skinny, 4 плана сохранены, trainer_changed, start/outcome после смены работают);
+- [x] сценарий проходит при отключенном OpenAI (Round 5.3: в тестовом worker'е нет OPENAI_API_KEY — весь цикл на детерминированных fallback'ах, mechanism_generated не эмитится);
+- [ ] mobile и desktop не имеют перекрытий и недоступных действий (нужен браузерный прогон UI; не автоматизируется на уровне D1 integration).
 
 ### Release checklist
 

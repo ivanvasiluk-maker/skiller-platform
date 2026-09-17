@@ -899,6 +899,115 @@ async function runAdjustmentCycle(db: D1Database) {
   };
 }
 
+/** E2E-неделя Day 1–7 через trainerCommand; дни «перематываются» через created_at профиля. */
+async function runWeekCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const user = {
+    userId: `week-user-${suffix}`,
+    displayName: "Week Cycle",
+    email: `week-${suffix}@example.invalid`,
+    fullName: null,
+  };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  // dayIndex вычисляется из created_at профиля — сдвигаем день прямым UPDATE.
+  const setDay = (day: number) =>
+    db.prepare("UPDATE trainer_profiles SET created_at=? WHERE user_id=?")
+      .bind(new Date(Date.now() - (day - 1) * 86_400_000).toISOString(), user.userId)
+      .run();
+
+  // Day 1: onboarding, первая ситуация, действие выполнено.
+  await command({ action: "onboard", name: "Неделя", trainerId: "beck", text: "Прокрастинация рабочих задач", consent: true });
+  const day1 = await command({ action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 6, risk: "no", text: "Не могу начать отчёт, откладываю уже неделю" });
+  const plan1 = day1.plans[0];
+  const pseudonym = day1.profile?.pseudonym ?? "";
+  await command({ action: "start", planId: plan1.id });
+  await command({ action: "outcome", planId: plan1.id, result: "done", helpfulness: 7 });
+  // Доказательство для transfer на Day 5: distract-delay помог в конфликте.
+  await seedOutcome(db, user.userId, "distract-delay", "conflict", { completed: true, helpfulness: 7, avoidance: false });
+
+  // reload/restart: повторные открытия возвращают то же состояние.
+  const reloadA = await command({ action: "open" });
+  const reloadB = await command({ action: "open" });
+  const reloadStable =
+    reloadA.plans.length === 1 &&
+    reloadB.plans.length === 1 &&
+    reloadA.messages.length === reloadB.messages.length &&
+    reloadB.day === 1;
+
+  // Day 2: возврат с взаимодействием, continuity видит вчерашний результат.
+  await setDay(2);
+  const day2 = await command({ action: "message", text: "Вернулся на второй день." });
+  const day2Continuity = day2.continuity.lastOutcome?.planId === plan1.id;
+
+  // Day 3: grounded recap с точной цитатой сохранённого результата.
+  await setDay(3);
+  await command({ action: "message", text: "Третий день, покажи итог." });
+  await command({ action: "recap", recapDay: 3 });
+  const day3 = await command({ action: "open" });
+  const recap3Exact = day3.recap.facts.some((fact) => fact.includes("полезность 7/10"));
+
+  // Day 4: repeat — та же ситуация, тот же навык.
+  await setDay(4);
+  const day4 = await command({ action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Снова не могу начать отчёт" });
+  const plan2 = day4.plans[0];
+  await command({ action: "start", planId: plan2.id });
+  await command({ action: "outcome", planId: plan2.id, result: "done", helpfulness: 8 });
+
+  // Day 5: transfer — другой вход, доказательство из конфликтного контекста.
+  await setDay(5);
+  const day5 = await command({ action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "distract", intensity: 5, risk: "no", text: "Залипаю в телефон вместо задачи" });
+  const plan3 = day5.plans[0];
+  await command({ action: "start", planId: plan3.id });
+  await command({ action: "outcome", planId: plan3.id, result: "failed", helpfulness: 3 });
+
+  // Day 6: replacement после неудачной попытки.
+  await setDay(6);
+  const day6 = await command({ action: "replace", planId: plan3.id });
+  const plan4 = day6.plans[0];
+
+  // Day 7: недельный recap, смена персонажа без потери прогресса, feedback.
+  await setDay(7);
+  await command({ action: "recap", recapDay: 7 });
+  const afterSwitch = await command({ action: "settings", trainerId: "skinny" });
+  await command({ action: "start", planId: plan4.id });
+  await command({ action: "outcome", planId: plan4.id, result: "done", helpfulness: 7 });
+  await command({ action: "feedback", helpfulness: 8, understood: 9, continueIntent: 7, helped: "Маленькие шаги", annoyed: "" });
+  const feedbackRow = await db
+    .prepare("SELECT count(*) AS count FROM pilot_feedback WHERE user_id=?")
+    .bind(pseudonym)
+    .first<{ count: number }>();
+  const eventRows = await db
+    .prepare("SELECT event_name FROM pilot_events WHERE user_id=?")
+    .bind(pseudonym)
+    .all<{ event_name: string }>();
+  const names = new Set(eventRows.results.map((row) => row.event_name));
+  const finalState = await command({ action: "open" });
+
+  return {
+    day1: snapshotPlan(day1.plans),
+    reloadStable,
+    day2: { day: day2.day, continuity: day2Continuity },
+    day3: { recapExact: recap3Exact },
+    day4: snapshotPlan(day4.plans),
+    day5: snapshotPlan(day5.plans),
+    day6: snapshotPlan(day6.plans),
+    day7: {
+      trainerAfterSwitch: afterSwitch.profile?.trainer_id ?? null,
+      plansPreserved: afterSwitch.plans.length,
+      feedbackStored: Number(feedbackRow?.count ?? 0),
+    },
+    engagedDays: finalState.engagedDays,
+    returnEvents: ["return_D2", "return_D3", "return_D7"].every((name) => names.has(name)),
+    recapEvents: ["recap_3d_viewed", "recap_7d_viewed"].every((name) => names.has(name)),
+    trainerChanged: names.has("trainer_changed"),
+    feedbackEvent: names.has("feedback_submitted"),
+    // В тестовом worker'е нет OPENAI_API_KEY: весь цикл проходит на детерминированных fallback'ах.
+    noAiEvents: !names.has("mechanism_generated"),
+  };
+}
+
 async function runPilotAnalytics(db: D1Database) {
   const suffix = crypto.randomUUID();
   const userId = `analytics-user-${suffix}`;
@@ -1020,6 +1129,9 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/adjustment-cycle") {
       return Response.json(await runAdjustmentCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/week-cycle") {
+      return Response.json(await runWeekCycle(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/outcome-idempotency") {
       return Response.json(await runOutcomeIdempotency(env.DB));

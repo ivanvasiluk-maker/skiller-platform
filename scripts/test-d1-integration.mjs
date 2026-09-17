@@ -466,8 +466,26 @@ try {
     eventsComplete: true,
   });
 
+  const week = await runEndpoint(baseUrl, "week-cycle");
+  assert.deepEqual(week, {
+    day1: { skillId: "micro-start", reasonCode: "first_try", stepCount: 3, durationSeconds: 120 },
+    reloadStable: true,
+    day2: { day: 2, continuity: true },
+    day3: { recapExact: true },
+    day4: { skillId: "micro-start", reasonCode: "repeat_helpful", stepCount: 3, durationSeconds: 120 },
+    day5: { skillId: "distract-delay", reasonCode: "transfer_helpful", stepCount: 3, durationSeconds: 120 },
+    day6: { skillId: "micro-start", reasonCode: "replace_low_fit", stepCount: 3, durationSeconds: 120 },
+    day7: { trainerAfterSwitch: "skinny", plansPreserved: 4, feedbackStored: 1 },
+    engagedDays: [1, 2, 3, 4, 5, 7],
+    returnEvents: true,
+    recapEvents: true,
+    trainerChanged: true,
+    feedbackEvent: true,
+    noAiEvents: true,
+  });
+
   console.log(
-    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution, export queue, Sheets mirror cycle with failure recovery, onboarding flow, outcome semantics, safety cycle, event completeness, AI fallback and full resize/replace/repeat/transfer adjustment cycle.",
+    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution, export queue, Sheets mirror cycle with failure recovery, onboarding flow, outcome semantics, safety cycle, event completeness, AI fallback, full resize/replace/repeat/transfer adjustment cycle and E2E week Day 1-7.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");
