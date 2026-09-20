@@ -1008,6 +1008,97 @@ async function runWeekCycle(db: D1Database) {
   };
 }
 
+/** PATCH 1.1: Day 1 → open loop → Day 2 follow-up → 4 ветки результата. */
+async function runRelationshipCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const makeUser = (tag: string) => ({
+    userId: `rel-${tag}-${suffix}`,
+    displayName: `Rel ${tag}`,
+    email: `rel-${tag}-${suffix}@example.invalid`,
+    fullName: null,
+  });
+  const command = (user: ReturnType<typeof makeUser>, sessionId: string, body: Record<string, unknown>) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  const eventsFor = async (userId: string) => {
+    const rows = await db
+      .prepare("SELECT event_name FROM pilot_events WHERE user_id=?")
+      .bind(userId)
+      .all<{ event_name: string }>();
+    return new Set(rows.results.map((r) => r.event_name));
+  };
+
+  // Day 1: DONE ветка
+  const userDone = makeUser("done");
+  const sDone = crypto.randomUUID();
+  await command(userDone, sDone, { action: "onboard", name: "Д", trainerId: "beck", text: "Откладываю отчёт", consent: true });
+  const sitDone = await command(userDone, sDone, { action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 6, risk: "no", text: "Не могу начать отчёт" });
+  const planDone = sitDone.plans[0];
+  const loopCreatedDone = sitDone.openLoops.length === 1;
+  await command(userDone, sDone, { action: "start", planId: planDone.id });
+  await command(userDone, sDone, { action: "outcome", planId: planDone.id, result: "done", helpfulness: 8 });
+  const evDone = await eventsFor(sitDone.profile?.pseudonym ?? "");
+  const resolvedDone = await db.prepare("SELECT status, outcome FROM open_loops WHERE plan_id=?").bind(planDone.id).first<{ status: string; outcome: string }>();
+
+  // Day 2: follow-up shown + answered
+  const userFup = makeUser("fup");
+  const sFup = crypto.randomUUID();
+  await command(userFup, sFup, { action: "onboard", name: "В", trainerId: "marsha", text: "Прокрастинация", consent: true });
+  const sitFup = await command(userFup, sFup, { action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю звонок" });
+  const loopFup = sitFup.openLoops[0];
+  // Перематываем follow_up_due в прошлое, чтобы loop стал due.
+  await db.prepare("UPDATE open_loops SET follow_up_due=? WHERE id=?").bind(new Date(Date.now() - 3600000).toISOString(), loopFup.id).run();
+  const fupReply = await command(userFup, sFup, { action: "message", mode: "talk", text: "Привет, я вернулся" });
+  const evFup = await eventsFor(fupReply.profile?.pseudonym ?? "");
+  const fupState = await db.prepare("SELECT follow_up_shown_at, status FROM open_loops WHERE id=?").bind(loopFup.id).first<{ follow_up_shown_at: string | null; status: string }>();
+
+  // PARTIAL ветка
+  const userPartial = makeUser("partial");
+  const sPartial = crypto.randomUUID();
+  await command(userPartial, sPartial, { action: "onboard", name: "П", trainerId: "skinny", text: "Застреваю", consent: true });
+  const sitPartial = await command(userPartial, sPartial, { action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Не доделал задачу" });
+  const planPartial = sitPartial.plans[0];
+  await command(userPartial, sPartial, { action: "start", planId: planPartial.id });
+  await command(userPartial, sPartial, { action: "outcome", planId: planPartial.id, result: "partial", helpfulness: 5 });
+  const evPartial = await eventsFor(sitPartial.profile?.pseudonym ?? "");
+
+  // NOT_DONE ветка
+  const userNotDone = makeUser("notdone");
+  const sNotDone = crypto.randomUUID();
+  await command(userNotDone, sNotDone, { action: "onboard", name: "Н", trainerId: "beck", text: "Избегание", consent: true });
+  const sitNotDone = await command(userNotDone, sNotDone, { action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 6, risk: "no", text: "Не начал задачу" });
+  const planNotDone = sitNotDone.plans[0];
+  await command(userNotDone, sNotDone, { action: "start", planId: planNotDone.id });
+  await command(userNotDone, sNotDone, { action: "outcome", planId: planNotDone.id, result: "failed", helpfulness: 3 });
+  const evNotDone = await eventsFor(sitNotDone.profile?.pseudonym ?? "");
+
+  return {
+    loopCreatedDone,
+    resolvedDone: resolvedDone ?? null,
+    doneEvents: {
+      outcome_done: evDone.has("outcome_done"),
+      success_factor: evDone.has("success_factor_identified"),
+      open_loop_resolved: evDone.has("open_loop_resolved"),
+    },
+    followUp: {
+      shown: evFup.has("follow_up_shown"),
+      answered: evFup.has("follow_up_answered"),
+      conversation_started: evFup.has("conversation_started"),
+      shownAt: Boolean(fupState?.follow_up_shown_at),
+      status: fupState?.status ?? null,
+    },
+    partialEvents: {
+      outcome_partial: evPartial.has("outcome_partial"),
+      chain_started: evPartial.has("chain_analysis_started"),
+      chain_completed: evPartial.has("chain_analysis_completed"),
+    },
+    notDoneEvents: {
+      outcome_not_done: evNotDone.has("outcome_not_done"),
+      missing_link_started: evNotDone.has("missing_link_started"),
+      missing_link_completed: evNotDone.has("missing_link_completed"),
+    },
+  };
+}
+
 async function runPilotAnalytics(db: D1Database) {
   const suffix = crypto.randomUUID();
   const userId = `analytics-user-${suffix}`;
@@ -1132,6 +1223,9 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/week-cycle") {
       return Response.json(await runWeekCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/relationship-cycle") {
+      return Response.json(await runRelationshipCycle(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/outcome-idempotency") {
       return Response.json(await runOutcomeIdempotency(env.DB));

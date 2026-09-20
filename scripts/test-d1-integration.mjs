@@ -444,7 +444,7 @@ try {
     writtenCount: 8,
     allRegisteredAndComplete: true,
     counterexampleRejected: true,
-    registrySize: 32,
+    registrySize: 47,
   });
 
   const aiFallback = await runEndpoint(baseUrl, "ai-fallback");
@@ -467,8 +467,7 @@ try {
   });
 
   const week = await runEndpoint(baseUrl, "week-cycle");
-  assert.deepEqual(week, {
-    day1: { skillId: "micro-start", reasonCode: "first_try", stepCount: 3, durationSeconds: 120 },
+  assert.deepEqual(week, {    day1: { skillId: "micro-start", reasonCode: "first_try", stepCount: 3, durationSeconds: 120 },
     reloadStable: true,
     day2: { day: 2, continuity: true },
     day3: { recapExact: true },
@@ -482,6 +481,34 @@ try {
     trainerChanged: true,
     feedbackEvent: true,
     noAiEvents: true,
+  });
+
+  const relationship = await runEndpoint(baseUrl, "relationship-cycle");
+  assert.deepEqual(relationship, {
+    loopCreatedDone: true,
+    resolvedDone: { status: "resolved", outcome: "done" },
+    doneEvents: {
+      outcome_done: true,
+      success_factor: true,
+      open_loop_resolved: true,
+    },
+    followUp: {
+      shown: true,
+      answered: true,
+      conversation_started: true,
+      shownAt: true,
+      status: "answered",
+    },
+    partialEvents: {
+      outcome_partial: true,
+      chain_started: true,
+      chain_completed: true,
+    },
+    notDoneEvents: {
+      outcome_not_done: true,
+      missing_link_started: true,
+      missing_link_completed: true,
+    },
   });
 
   console.log(

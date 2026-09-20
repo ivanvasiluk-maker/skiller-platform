@@ -25,6 +25,8 @@ export async function produceFreeTalkReply(input: {
   apiKey: string;
   model: string;
   fetchImpl?: typeof fetch;
+  /** PATCH 1.1: инструкции оркестратора (структурированный контекст). */
+  instructionsOverride?: string;
 }): Promise<string> {
   const bible = getCharacterBible(input.profile.trainer_id);
   const fallback = buildFreeTalkFallback(bible);
@@ -43,10 +45,12 @@ export async function produceFreeTalkReply(input: {
         model: input.model,
         store: false,
         max_output_tokens: 450,
-        instructions: buildFreeTalkInstructions(
-          bible,
-          interactionModes[input.profile.interaction_mode],
-        ),
+        instructions:
+          input.instructionsOverride ??
+          buildFreeTalkInstructions(
+            bible,
+            interactionModes[input.profile.interaction_mode],
+          ),
         input: input.messages.map((m) => ({ role: m.role, content: m.text })),
         text: {
           format: {

@@ -6,6 +6,7 @@ import { ensureUser, recommendSkill, startAttempt, completeAttempt, completeOnbo
 import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-idempotency";
 import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-continuity";
 import { produceFreeTalkReply } from "@/lib/free-talk";
+import { ensureOpenLoopStorage, createOpenLoop, dueOpenLoop, markFollowUpShown, markFollowUpAnswered, resolveOpenLoop, openLoopForPlan, buildConversationContext, buildOrchestratorInstructions, topicFromText, activeOpenLoops, type OpenLoop } from "@/lib/conversation-orchestrator";
 import type { OutcomeReasonCode } from "@/lib/outcome-policy";
 import { recordPilotEvent, type PilotEventPayload } from "@/lib/pilot-events";
 import { skillCardVersion } from "@/lib/skill-card-versions";
@@ -15,7 +16,7 @@ import { trainers, PRODUCT_VERSION, dayIndex, requiresSafetyRoute, safetyMessage
 export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
 export type TrainerMessage = { id: string; role: "user" | "assistant"; text: string; trainer_id: TrainerId; created_at: string };
 export type TrainerPlan = { id: string; situation_id: string; skill_json: string; skill_title: string; entry_mode: string; intensity_before: number; intensity_after: number | null; attempt_id: string | null; result: "done" | "failed" | "more" | null; helpfulness: number | null; decision_reason_code: OutcomeReasonCode; decision_version: string; created_at: string };
-export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity };
+export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity; openLoops: OpenLoop[]; dueLoop: OpenLoop | null };
 
 const statements = [
   "CREATE TABLE IF NOT EXISTS trainer_profiles (user_id TEXT PRIMARY KEY, pseudonym TEXT NOT NULL UNIQUE, name TEXT NOT NULL, trainer_id TEXT NOT NULL, interaction_mode TEXT NOT NULL DEFAULT 'explore', main_problem TEXT NOT NULL, consent_version TEXT NOT NULL, created_at TEXT NOT NULL, last_interaction_at TEXT NOT NULL, safety_flag INTEGER NOT NULL DEFAULT 0)",
@@ -52,13 +53,16 @@ async function profileFor(userId: string) {
 export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
   await ensureUser(user);
   await ensureTrainerStorage();
+  await ensureOpenLoopStorage();
   const db = getRawDb();
   const profile = await profileFor(user.userId);
-  if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [], continuity: buildTrainerContinuity([]) };
-  const [messages, plans, days] = await Promise.all([
+  if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [], continuity: buildTrainerContinuity([]), openLoops: [], dueLoop: null };
+  const [messages, plans, days, loops, due] = await Promise.all([
     db.prepare("SELECT * FROM (SELECT id,role,text,trainer_id,created_at FROM trainer_messages WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 60) ORDER BY created_at,id").bind(user.userId).all<TrainerMessage>(),
     db.prepare("SELECT * FROM trainer_plans WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100").bind(user.userId).all<TrainerPlan>(),
     db.prepare("SELECT DISTINCT day_index FROM pilot_events WHERE user_id=? AND event_name='engaged_return' ORDER BY day_index").bind(profile.pseudonym).all<{ day_index: number }>(),
+    activeOpenLoops(user.userId),
+    dueOpenLoop(user.userId),
   ]);
   const day = dayIndex(profile.created_at);
   const engagedDays = days.results.map((entry) => entry.day_index);
@@ -75,6 +79,8 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
       safetyAllowsPractice: !profile.safety_flag,
       engagedDays,
     }),
+    openLoops: loops,
+    dueLoop: due,
   };
 }
 async function event(
@@ -116,7 +122,7 @@ const bodySchema = z.object({
   mode: z.enum(["practice", "stuck", "distress", "talk"]).optional(), kind: z.enum(["stuck", "emotion", "conflict", "other"]).optional(),
   risk: z.enum(["no", "yes", "unknown"]).optional(), intensity: z.number().int().min(0).max(10).optional(),
   signal: z.enum(["thought", "body", "emotion", "urge"]).optional(), urge: z.enum(["avoid", "distract", "attack", "withdraw"]).optional(),
-  planId: z.string().uuid().optional(), result: z.enum(["done", "failed", "more"]).optional(),
+  planId: z.string().uuid().optional(), result: z.enum(["done", "failed", "more", "partial"]).optional(),
   helpfulness: z.number().int().min(0).max(10).optional(), understood: z.number().int().min(0).max(10).optional(), continueIntent: z.number().int().min(0).max(10).optional(),
   helped: z.string().max(800).optional(), annoyed: z.string().max(800).optional(), recapDay: z.union([z.literal(3), z.literal(7)]).optional(),
 }).strict();
@@ -168,6 +174,17 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
       await message(profile, "user", body.text, `${key}:user`);
       await event(profile, body.sessionId, "message_sent", key);
       await engage(profile, body.sessionId);
+      // PATCH 1.1: при входе приоритет отдаём due open loop — продолжение вчерашнего разговора.
+      const due = await dueOpenLoop(user.userId);
+      if (due) {
+        if (!due.follow_up_shown_at) {
+          await markFollowUpShown(due.id);
+          await event(profile, body.sessionId, "follow_up_shown", due.id, { loop_id: due.id });
+        }
+        await markFollowUpAnswered(due.id);
+        await event(profile, body.sessionId, "follow_up_answered", due.id, { loop_id: due.id });
+      }
+      await event(profile, body.sessionId, "conversation_started", key);
       const unsafe = profile.safety_flag || requiresSafetyRoute(body.text, body.action === "situation" ? body.risk ?? "unknown" : "no");
       if (unsafe) {
         await db.prepare("UPDATE trainer_profiles SET safety_flag=1 WHERE user_id=?").bind(user.userId).run();
@@ -177,7 +194,14 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         await event(profile, body.sessionId, "free_talk_started", body.sessionId);
         await event(profile, body.sessionId, "chat_started", body.sessionId);
         const state = await trainerState(user);
-        await message(profile, "assistant", await freeTalk(profile, state.messages.slice(-8)), `${key}:reply`);
+        const ctx = await buildConversationContext({
+          userId: user.userId, profile, messages: state.messages.slice(-8), plans: state.plans, engagedDays: state.engagedDays,
+          situation: { mode: body.mode ?? "talk" },
+        });
+        const replyText = due
+          ? `Возвращаюсь к договорённости: «${due.topic}» → ${due.planned_action}. Как прошло — получилось, частично или не сделал?`
+          : await freeTalk(profile, state.messages.slice(-8), buildOrchestratorInstructions(ctx));
+        await message(profile, "assistant", replyText, `${key}:reply`);
       } else {
         const mode = body.mode ?? "stuck";
         if (mode === "distress") await event(profile, body.sessionId, "distress_flow_started", key);
@@ -195,6 +219,16 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           await message(profile, "assistant", `${trainers[profile.trainer_id].greeting} ${recommendation.reason ?? ""} Попробуем «${skill.title}».`, `${key}:reply`);
           await event(profile, body.sessionId, "skill_recommended", key, { skill_id: skill.id, decision_reason_code: recommendation.reasonCode ?? "first_try", decision_version: recommendation.decisionVersion ?? "outcome-policy-v2" });
           if (recommendation.analysis) await event(profile, body.sessionId, "mechanism_generated", key);
+          // PATCH 1.1: сохраняем договорённость как open loop.
+          const loop = await createOpenLoop({
+            userId: user.userId,
+            planId: key,
+            topic: topicFromText(body.text),
+            plannedAction: skill.title,
+            entryMode: mode,
+            expectedHours: 24,
+          });
+          await event(profile, body.sessionId, "open_loop_created", loop.id, { loop_id: loop.id, entry_mode: mode });
         }
       }
     }
@@ -226,7 +260,38 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         if (plan.entry_mode === "practice" && body.result !== "failed") await event(profile, body.sessionId, "training_completed", plan.id, { skill_id: skill.id });
         if (plan.entry_mode === "distress") await event(profile, body.sessionId, "distress_flow_completed", plan.id, { skill_id: skill.id, before: plan.intensity_before, after: body.intensity! });
         await engage(profile, body.sessionId);
-        await message(profile, "assistant", body.result === "failed" ? trainers[profile.trainer_id].failure : trainers[profile.trainer_id].success, `${key}:reply`);
+        // PATCH 1.1: четыре ветки результата + закрытие open loop.
+        const loop = await openLoopForPlan(plan.id);
+        const loopId = loop?.id ?? plan.id;
+        if (body.result === "done") {
+          await event(profile, body.sessionId, "outcome_done", loopId, { loop_id: loopId });
+          await event(profile, body.sessionId, "success_factor_identified", loopId, { loop_id: loopId });
+          if (loop) await resolveOpenLoop(loop.id, "done");
+          await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "done" });
+          await message(profile, "assistant", `${trainers[profile.trainer_id].success} Что помогло больше всего? Запомню это как твой фактор успеха.`, `${key}:reply`);
+        } else if (body.result === "partial") {
+          // PATCH 1.1: PARTIAL → точка остановки → Behavioral Chain Analysis.
+          await event(profile, body.sessionId, "outcome_partial", loopId, { loop_id: loopId });
+          await event(profile, body.sessionId, "chain_analysis_started", loopId, { loop_id: loopId });
+          if (loop) await resolveOpenLoop(loop.id, "partial");
+          await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "partial" });
+          await message(profile, "assistant", "Частично — это уже факт. На каком моменте ты остановился? Разберём цепочку: триггер → мысль → импульс → действие, и найдём точку остановки.", `${key}:reply`);
+          await event(profile, body.sessionId, "chain_analysis_completed", loopId, { loop_id: loopId });
+        } else if (body.result === "failed") {
+          // PATCH 1.1: NOT_DONE → Missing Link Analysis без автозамены skill.
+          await event(profile, body.sessionId, "outcome_not_done", loopId, { loop_id: loopId });
+          await event(profile, body.sessionId, "missing_link_started", loopId, { loop_id: loopId });
+          if (loop) await resolveOpenLoop(loop.id, "not_done");
+          await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "not_done" });
+          await message(profile, "assistant", `${trainers[profile.trainer_id].failure} Где именно цепочка прервалась: не дошёл до места, отвлёкся или шаг оказался велик? Найдём разрыв — и только потом уменьшим шаг.`, `${key}:reply`);
+          await event(profile, body.sessionId, "missing_link_completed", loopId, { loop_id: loopId });
+        } else {
+          // more → трактуем как done с превышением плана
+          await event(profile, body.sessionId, "outcome_done", loopId, { loop_id: loopId });
+          if (loop) await resolveOpenLoop(loop.id, "done");
+          await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "done" });
+          await message(profile, "assistant", trainers[profile.trainer_id].success, `${key}:reply`);
+        }
       }
       if (body.action === "resize" || body.action === "replace") {
         if (plan.result !== "failed") throw new Error("Изменение предлагается после неудачной попытки.");
@@ -263,12 +328,13 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
   }
 }
 
-async function freeTalk(profile: TrainerProfile, messages: TrainerMessage[]): Promise<string> {
+async function freeTalk(profile: TrainerProfile, messages: TrainerMessage[], instructionsOverride?: string): Promise<string> {
   const processEnv = typeof process !== "undefined" ? process.env : undefined;
   return produceFreeTalkReply({
     profile,
     messages,
     apiKey: processEnv?.OPENAI_API_KEY || env.OPENAI_API_KEY || "",
     model: processEnv?.OPENAI_MODEL || env.OPENAI_MODEL || "gpt-4.1-mini",
+    instructionsOverride,
   });
 }
