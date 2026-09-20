@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUpRight, ArrowLeft, Check, MessageCircle, Play, Settings2, Sparkles, X } from "lucide-react";
+import { ArrowUpRight, ArrowLeft, Check, MessageCircle, Mic, MicOff, Play, Settings2, Sparkles, X } from "lucide-react";
 import { trainers, interactionModes, type TrainerId, type EntryMode } from "@/lib/trainers";
 import type { TrainerState, TrainerPlan } from "@/lib/trainer-data";
 import { explainDecisionReason } from "@/lib/trainer-continuity";
@@ -55,6 +55,12 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   const messagesRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef("");
   const inflight = useRef(false);
+  // PATCH 1.1 (voice parity): микрофон → транскрипция → тот же text pipeline.
+  const [recording, setRecording] = useState(false);
+  const [voiceError, setVoiceError] = useState("");
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const voiceChunksRef = useRef<Blob[]>([]);
+  const voiceStreamRef = useRef<MediaStream | null>(null);
   const profile = state.profile;
   const trainer = trainers[profile?.trainer_id ?? trainerId];
   const pending = state.plans.find(p => !p.result);
@@ -100,6 +106,51 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   async function send() {
     const result = await command({ action: mode === "talk" ? "message" : "situation", text, mode, kind, signal, urge, intensity, risk });
     if (result) setText("");
+  }
+  function stopVoiceStream() {
+    voiceStreamRef.current?.getTracks().forEach((t) => t.stop());
+    voiceStreamRef.current = null;
+  }
+  async function toggleRecording() {
+    setVoiceError("");
+    if (recording) { mediaRecorderRef.current?.stop(); return; }
+    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setVoiceError("Браузер не поддерживает запись. Можно написать текстом.");
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "";
+      const rec = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+      voiceChunksRef.current = [];
+      voiceStreamRef.current = stream;
+      mediaRecorderRef.current = rec;
+      rec.ondataavailable = (e) => { if (e.data.size) voiceChunksRef.current.push(e.data); };
+      rec.onstop = async () => {
+        stopVoiceStream();
+        setRecording(false);
+        const blob = new Blob(voiceChunksRef.current, { type: mimeType || "audio/webm" });
+        if (!blob.size) return;
+        // Транскрипция через тот же /api/skiller, затем текст в общий composer pipeline.
+        try {
+          const form = new FormData();
+          form.set("action", "transcribe");
+          form.set("audio", blob, "voice.webm");
+          const res = await fetch("/api/skiller", { method: "POST", body: form });
+          const data = await res.json() as { text?: string; error?: string };
+          if (!res.ok) throw new Error(data.error || "Не удалось расшифровать");
+          setText((prev) => (prev ? `${prev} ` : "") + (data.text ?? ""));
+          await command({ action: "message", text: data.text ?? "", mode: "talk" });
+        } catch (err) {
+          setVoiceError(err instanceof Error ? err.message : "Ошибка транскрипции");
+        }
+      };
+      rec.start();
+      setRecording(true);
+    } catch {
+      setVoiceError("Доступ к микрофону не получен. Можно продолжить текстом.");
+      stopVoiceStream();
+    }
   }
   async function onboard() {
     const result = await command({ action: "onboard", name, trainerId, text, consent });
@@ -177,7 +228,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
           {!pending && latest?.result === "failed" && <section className="trainer-panel"><h2>Изменим размер шага?</h2><p>{trainer.failure}</p><div className="trainer-actions"><button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "resize", planId: latest.id })}>Упростить до первого шага</button><button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "replace", planId: latest.id })}>Попробовать другой навык</button></div></section>}
           <form className="trainer-composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="trainer-label" htmlFor="message">{mode === "talk" ? "Что у тебя на уме?" : "Один конкретный эпизод"}</label><textarea id="message" rows={3} className="trainer-input" maxLength={1200} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }} placeholder="Можно начать с пары предложений…"/>
           {mode !== "talk" && <div className="trainer-capture"><label>Ситуация<select value={kind} onChange={e => setKind(e.target.value)}><option value="stuck">Не могу начать</option><option value="emotion">Сильная эмоция</option><option value="conflict">Конфликт</option><option value="other">Другое</option></select></label><label>Что первым замечаешь?<select value={signal} onChange={e => setSignal(e.target.value)}><option value="thought">Мысль</option><option value="body">Ощущение в теле</option><option value="emotion">Эмоцию</option><option value="urge">Импульс</option></select></label><label>Что хочется сделать?<select value={urge} onChange={e => setUrge(e.target.value)}><option value="avoid">Отложить / замереть</option><option value="distract">Отвлечься</option><option value="attack">Спорить / доказывать</option><option value="withdraw">Уйти / закрыться</option></select></label><Score label="Интенсивность сейчас" value={intensity} onChange={setIntensity}/><label className="trainer-risk">Есть риск причинить вред себе или другому?<select value={risk} onChange={e => setRisk(e.target.value)}><option value="unknown">Выбери ответ</option><option value="no">Нет</option><option value="yes">Да / не уверен</option></select></label></div>}
-          <div className="trainer-row"><span className="trainer-caption">{mode === "talk" ? "Можно говорить, не переходя к упражнению." : "Сначала проверим состояние, затем предложим шаг."}</span><button className="trainer-primary" disabled={busy || text.trim().length < 3 || (mode !== "talk" && risk === "unknown") || (mode !== "talk" && Boolean(pending))}>{busy ? "Подождём ответ…" : mode === "talk" ? "Отправить" : "Подобрать шаг"}<ArrowUpRight size={17}/></button></div></form><div className="trainer-actions"><button className="trainer-link" onClick={() => enter("talk")}><MessageCircle size={16}/> Продолжить разговор</button><button className="trainer-link" onClick={() => enter("stuck")}>Разобрать ситуацию</button><button className="trainer-link" onClick={() => enter("distress")}>Помочь с состоянием</button></div></>}
+          <div className="trainer-row"><span className="trainer-caption">{mode === "talk" ? "Можно говорить, не переходя к упражнению." : "Сначала проверим состояние, затем предложим шаг."}</span><div className="trainer-row" style={{gap:8}}><button type="button" aria-label={recording ? "Остановить запись" : "Записать голосом"} aria-pressed={recording} className="trainer-icon-button" onClick={() => void toggleRecording()}>{recording ? <MicOff size={18}/> : <Mic size={18}/>}</button><button className="trainer-primary" disabled={busy || text.trim().length < 3 || (mode !== "talk" && risk === "unknown") || (mode !== "talk" && Boolean(pending))}>{busy ? "Подождём ответ…" : mode === "talk" ? "Отправить" : "Подобрать шаг"}<ArrowUpRight size={17}/></button></div></div>{voiceError && <p className="trainer-caption" role="status">{voiceError}</p>}</form><div className="trainer-actions"><button className="trainer-link" onClick={() => enter("talk")}><MessageCircle size={16}/> Продолжить разговор</button><button className="trainer-link" onClick={() => enter("stuck")}>Разобрать ситуацию</button><button className="trainer-link" onClick={() => enter("distress")}>Помочь с состоянием</button></div></>}
         </>}
         {screen === "journal" && <><span className="trainer-kicker">ПАМЯТЬ О РЕАЛЬНЫХ ПОПЫТКАХ</span><h1>Твоя неделя.</h1><p className="trainer-lead">{state.recap.attempts} попыток · {state.recap.completed} выполненных действий</p>{state.day >= 3 && <button className="trainer-primary" onClick={showRecap}>Итог {state.day >= 7 ? "недели" : "трёх дней"}<Sparkles size={17}/></button>}<div className="trainer-history">{state.plans.length ? state.plans.map(p => <article key={p.id}><span>{new Date(p.created_at).toLocaleDateString("ru")}</span><h3>{p.skill_title}</h3><p>{p.result === "done" ? "Получилось" : p.result === "more" ? "Сделано больше" : p.result === "failed" ? "Не получилось — можно уменьшить шаг" : p.attempt_id ? "Практика начата" : "Шаг предложен"}</p>{p.helpfulness !== null && <small>Оценка пользы: {p.helpfulness}/10</small>}</article>) : <p>Здесь появятся твои попытки. Начать можно с одного маленького действия.</p>}</div><a className="trainer-link" href="/journal">Открыть прежнюю карту навыков <ArrowUpRight size={16}/></a></>}
         {screen === "recap" && <><span className="trainer-kicker">{trainer.name.toUpperCase()} · ИТОГ {state.day >= 7 ? "НЕДЕЛИ" : "ТРЁХ ДНЕЙ"}</span><h1>Что мы заметили.</h1><p className="trainer-lead">Только сохранённые попытки. Без оценок твоей личности.</p><div className="trainer-recap-stats"><div><strong>{state.recap.proposed}</strong><span>действий предложено</span></div><div><strong>{state.recap.attempts}</strong><span>реальных попыток</span></div><div><strong>{state.recap.outcomesRecorded}</strong><span>результатов отмечено</span></div><div><strong>{state.recap.engagedDays.length}</strong><span>дней с взаимодействием</span></div></div><section className="trainer-panel"><h2>Сохранённые факты</h2><p>{state.recap.facts.join(" ") || "Пока нет сохранённых действий и результатов."}</p></section>{state.day >= 7 && <><section className="trainer-panel"><span className="trainer-kicker">РАБОЧАЯ ГИПОТЕЗА</span><h2>{state.recap.day7.workingHypothesis}</h2></section><section className="trainer-panel"><span className="trainer-kicker">УВЕРЕННОСТЬ · {state.recap.day7.confidenceLevel === "limited" ? "ОГРАНИЧЕННАЯ" : "НИЗКАЯ"}</span><h2>Насколько можно опираться на вывод</h2><p>{state.recap.day7.confidence}</p></section><section className="trainer-panel"><span className="trainer-kicker">СЛЕДУЮЩИЙ ЭКСПЕРИМЕНТ</span><h2>{state.recap.day7.nextExperiment.title}</h2><p>{state.recap.day7.nextExperiment.prompt}</p></section></>}{[["Какие действия были предложены", state.recap.skills], ["По твоим оценкам было полезно", state.recap.helpful], ["Не подошло или получило низкую оценку", state.recap.difficult], ["Польза отмечена повторно", state.recap.repeated], ["Чего мы пока не знаем", state.recap.unknown]].map(([label, values]) => <section className="trainer-panel" key={label as string}><h2>{label}</h2><p>{(values as string[]).join(" · ") || "Нет таких сохранённых данных"}</p></section>)}{state.day < 7 && <p className="trainer-lead">{state.recap.next}</p>}<form className="trainer-panel" onSubmit={async e => { e.preventDefault(); if (await command({ action: "feedback", ...feedback })) setFeedbackSaved(true); }}><h2>Как тебе эта работа?</h2><Score label="Насколько полезно?" value={feedback.helpfulness} onChange={v => setFeedback({ ...feedback, helpfulness: v })}/><Score label="Было ощущение, что тренер понимает и помнит?" value={feedback.understood} onChange={v => setFeedback({ ...feedback, understood: v })}/><Score label="Насколько хочется продолжить?" value={feedback.continueIntent} onChange={v => setFeedback({ ...feedback, continueIntent: v })}/><label className="trainer-label">Что помогло?<textarea className="trainer-input" maxLength={800} value={feedback.helped} onChange={e => setFeedback({ ...feedback, helped: e.target.value })}/></label><label className="trainer-label">Что мешало?<textarea className="trainer-input" maxLength={800} value={feedback.annoyed} onChange={e => setFeedback({ ...feedback, annoyed: e.target.value })}/></label><button className="trainer-primary" disabled={busy || feedbackSaved}>{feedbackSaved ? "Спасибо, ответ сохранён" : "Сохранить отзыв"}</button></form></>}

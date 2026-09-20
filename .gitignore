@@ -23,6 +23,8 @@
 *.pem
 __pycache__/
 *.py[cod]
+*.egg-info/
+docs/~$*.docx
 
 # debug
 npm-debug.log*
