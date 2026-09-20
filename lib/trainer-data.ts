@@ -330,10 +330,12 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
 
 async function freeTalk(profile: TrainerProfile, messages: TrainerMessage[], instructionsOverride?: string): Promise<string> {
   const processEnv = typeof process !== "undefined" ? process.env : undefined;
+  // SKILLER_AI_DISABLED имеет приоритет над env.* (тестовая изоляция от .env.local).
+  const aiDisabled = processEnv?.SKILLER_AI_DISABLED === "1";
   return produceFreeTalkReply({
     profile,
     messages,
-    apiKey: processEnv?.OPENAI_API_KEY || env.OPENAI_API_KEY || "",
+    apiKey: aiDisabled ? "" : (processEnv?.OPENAI_API_KEY || env.OPENAI_API_KEY || ""),
     model: processEnv?.OPENAI_MODEL || env.OPENAI_MODEL || "gpt-4.1-mini",
     instructionsOverride,
   });

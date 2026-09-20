@@ -43,8 +43,13 @@ assertTestD1({
 const environment = {
   ...process.env,
   SKILLER_ENV: "test",
+  SKILLER_AI_DISABLED: "1",
   WRANGLER_SEND_METRICS: "false",
   WRANGLER_WRITE_LOGS: "false",
+  // Изоляция от локального .env.local: wrangler грузит его с override:true и перезаписывает
+  // пустой OPENAI_API_KEY из spawn env. Отключаем загрузку dotenv в тестовом worker.
+  CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
+  OPENAI_API_KEY: "",
 };
 const baseArgs = [
   "--config",

@@ -246,6 +246,8 @@ function requireOpenAIKey() {
 }
 
 function getOpenAIKey() {
+  // SKILLER_AI_DISABLED имеет приоритет над любым источником ключа (тестовая изоляция).
+  if (runtimeEnv("SKILLER_AI_DISABLED") === "1") return "";
   return runtimeEnv("OPENAI_API_KEY") || env.OPENAI_API_KEY || "";
 }
 
