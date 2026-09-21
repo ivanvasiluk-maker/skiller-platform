@@ -441,6 +441,24 @@ async function runSheetsExportCycle(db: D1Database) {
     skillCardVersion: null,
     createdAt: "2026-09-13T09:00:00.000Z",
   });
+  // PATCH 1.1: событие conversation layer попадает в очередь и экспортируется без приватного текста.
+  await recordPilotEvent(db, {
+    id: `sheets-loop-${suffix}`,
+    userId,
+    sessionId: `sheets-session-${suffix}`,
+    trainerId: "beck",
+    dayIndex: 2,
+    eventName: "open_loop_resolved",
+    payload: {
+      loop_id: `loop-${suffix}`,
+      outcome: "done",
+      skill_id: "micro-start",
+      // приватное поле, не должно экспортироваться:
+      text: "приватный текст разговора",
+    } as never,
+    skillCardVersion: skillCardVersion("micro-start"),
+    createdAt: "2026-09-14T09:00:00.000Z",
+  });
 
   const sheets = createInMemorySheets();
   const first = await runSheetsExport(db, sheets.transport);
@@ -487,12 +505,17 @@ async function runSheetsExportCycle(db: D1Database) {
   const myEventRows = eventsTab.filter((row) => row[3] === userId);
   const myEventRowsFinal = eventsFinal.filter((row) => row[3] === userId);
   const myUserRows = usersTab.filter((row) => row[0] === userId);
+  // PATCH 1.1: строка open_loop_resolved экспортирована, приватный текст — нет.
+  const loopRow = eventsFinal.find((row) => row[4] === "open_loop_resolved" && row[3] === userId);
+  const loopRowHasNoPrivateText = loopRow ? !JSON.stringify(loopRow).includes("приватный текст") : false;
 
   return {
     firstFailed: first.failed,
     firstDeadLettered: first.deadLettered,
     myEventRows: myEventRows.length,
     noPrivateText: !JSON.stringify(eventsTab).includes("приватный текст"),
+    loopEventExported: Boolean(loopRow),
+    loopRowHasNoPrivateText,
     myUserRows: myUserRows.length,
     dailyHasHeader: (dailyTab[0]?.[0] ?? null) === "user_id",
     cohortsHasData: cohortsTab.length >= 2,

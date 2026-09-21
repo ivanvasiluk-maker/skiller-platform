@@ -389,12 +389,14 @@ try {
   // относящиеся к событиям этого сценария.
   assert.equal(sheetsExport.firstFailed, 0);
   assert.equal(sheetsExport.firstDeadLettered, 0);
-  assert.equal(sheetsExport.myEventRows, 3, "3 события сценария попали в EVENTS");
+  assert.equal(sheetsExport.myEventRows, 4, "4 события сценария попали в EVENTS");
   assert.equal(sheetsExport.noPrivateText, true);
+  assert.equal(sheetsExport.loopEventExported, true, "PATCH 1.1 open_loop_resolved экспортирован");
+  assert.equal(sheetsExport.loopRowHasNoPrivateText, true, "приватный текст не экспортирован из PATCH 1.1 события");
   assert.equal(sheetsExport.myUserRows, 1, "upsert USERS без дублей");
   assert.equal(sheetsExport.dailyHasHeader, true);
   assert.equal(sheetsExport.cohortsHasData, true);
-  assert.deepEqual(sheetsExport.queueAfterFirst, ["sent", "sent", "sent"]);
+  assert.deepEqual(sheetsExport.queueAfterFirst, ["sent", "sent", "sent", "sent"]);
   assert.equal(sheetsExport.secondClaimed, 0, "повторный прогон: очередь пуста");
   assert.equal(
     sheetsExport.eventsAfterSecond,
@@ -408,7 +410,7 @@ try {
     hasRetryAt: true,
   });
   assert.deepEqual(sheetsExport.fourth, { claimed: 1, sent: 1, failed: 0 });
-  assert.equal(sheetsExport.myEventRowsFinal, 4, "retry доставил 4-е событие");
+  assert.equal(sheetsExport.myEventRowsFinal, 5, "retry доставил 5-е событие");
 
   const onboarding = await runEndpoint(baseUrl, "onboarding-flow");
   assert.deepEqual(onboarding, {

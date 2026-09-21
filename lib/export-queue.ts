@@ -45,6 +45,9 @@ const EXPORTABLE_PAYLOAD_KEY_ALLOWLIST = new Set([
   "product_version",
   "character_version",
   "skill_card_version",
+  // PATCH 1.1: conversation relationship events.
+  "loop_id",
+  "outcome",
 ]);
 
 export function minimizePayloadForExport(
