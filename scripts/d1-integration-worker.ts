@@ -784,12 +784,31 @@ async function runAiFallback(db: D1Database) {
     model: "test-model",
     fetchImpl: () => Promise.resolve(valid),
   });
+  // PATCH 1.1: orchestrator instructions (структурированный контекст) — таймаут → тот же fallback.
+  const orchestratorInstructions = [
+    "Ты Марша, AI-тренер.",
+    "USER PROFILE: Тест, день 2.",
+    "TRAINER: Марша, режим explore.",
+    "ACTIVE OPEN LOOPS: «отчёт» → Минимальный старт (due вчера).",
+    "SAFETY STATE: практика разрешена.",
+  ].join("\n");
+  const onOrchestratorTimeout = await produceFreeTalkReply({
+    profile,
+    messages,
+    apiKey: "test-key",
+    model: "test-model",
+    instructionsOverride: orchestratorInstructions,
+    fetchImpl: () => {
+      throw new Error("The operation timed out.");
+    },
+  });
   return {
     onTimeoutIsFallback: onTimeout === expectedFallback,
     onMalformedIsFallback: onMalformed === expectedFallback,
     onHostileIsFallback: onHostile === expectedFallback,
     onValidPassThrough: onValid.startsWith("Понимаю"),
     fallbackMentionsBridge: onTimeout.includes("действие"),
+    onOrchestratorTimeoutIsFallback: onOrchestratorTimeout === expectedFallback,
   };
 }
 

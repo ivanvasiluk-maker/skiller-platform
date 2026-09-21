@@ -459,6 +459,7 @@ try {
     onHostileIsFallback: true,
     onValidPassThrough: true,
     fallbackMentionsBridge: true,
+    onOrchestratorTimeoutIsFallback: true,
   });
 
   const adjustment = await runEndpoint(baseUrl, "adjustment-cycle");
