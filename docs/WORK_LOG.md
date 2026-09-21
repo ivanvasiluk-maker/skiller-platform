@@ -1,4 +1,37 @@
-# Журнал работы — точка заморозки 2026-09-20
+# Журнал работы — обновлено 2026-09-21
+
+## Текущее состояние (точка восстановления)
+Ветка `feat/conversation-relationship-layer`, HEAD `5e774fb`, чистое дерево, `npm run verify` → exit 0. Запушено на GitHub (origin/feat/conversation-relationship-layer = 5e774fb).
+
+## Сделано 2026-09-21 (продолжение)
+- **Спринт 13 (часть 1)**: drizzle миграция `0007_open_loops.sql` + snapshot + journal; open_loops теперь через миграции (бриф §10 закрыт). D1 smoke: 10 таблиц.
+- **Спринт 13 (часть 2)**: миграция `0008_relationship_memory.sql` — `success_factors` + `intervention_memory`; персистентная память пишется в ветках DONE/PARTIAL/NOT_DONE. D1 smoke: 12 таблиц.
+- **Integration**: relationship-cycle расширен ассертами памяти (successFactorsStored=1, interventionPartial, interventionNotDone) — PASS.
+- **Ручной UI smoke (desktop, localhost:5173)**: Day 1 → open loop → Day 2 follow-up banner + quick replies → inline intervention card → DONE ветка — всё подтверждено в браузере. Данные персистятся в D1 (проверено через sqlite).
+- Snapshot-генератор: `scripts/build-snapshot-0007.mjs` (0007+0008).
+
+## Что НЕ сделано
+- **Спринт 10–12**: a11y/responsive QA чек-лист (desktop + real phone); analytics integrity новых событий в Sheets export.
+- **Спринт 13 (часть 3)**: production migration rehearsal на копии production D1; secrets/env check; rollback plan.
+- **Спринт 14**: deploy + post-deploy smoke (desktop + phone).
+- **Спринт 15**: финальная передача (PR, логи, screenshots, rollback).
+- Открытый вопрос UX: quick reply на уже-resolved loop молчит (guard `!plan.result`) — корректно, но подумать о повторном follow-up.
+
+## Блокер (напоминание)
+Контрольная ревизия 3d1b4e7 не существует нигде. Conversation-слой реализован заново по спецификации брифа — подтверждено владельцем.
+
+## Ключевые файлы
+- `lib/conversation-orchestrator.ts` (open loops + memory + orchestrator)
+- `drizzle/0007_open_loops.sql`, `0008_relationship_memory.sql` + meta
+- `lib/trainer-data.ts`, `lib/pilot-event-schema.ts` (47 событий)
+- `app/trainer-app.tsx`, `app/trainer.css` (chat shell)
+- `scripts/d1-integration-worker.ts`, `scripts/test-d1-integration.mjs`, `scripts/test-d1.mjs`, `scripts/build-snapshot-0007.mjs`
+- `docs/AUDIT_2026_09_20.md`
+
+## Как продолжить
+1. `cd skiller-platform-main/skiller-platform-main; git checkout feat/conversation-relationship-layer; git pull`
+2. `npm run verify` — подтвердить зелёное.
+3. Спринт 10–12 (a11y/phone) или Спринт 13 ч.3 (production rehearsal) — по приоритету.
 
 ## Где остановились (восстановление завтра)
 Работаем в `skiller-platform-main/skiller-platform-main`, ветка `feat/conversation-relationship-layer`.
