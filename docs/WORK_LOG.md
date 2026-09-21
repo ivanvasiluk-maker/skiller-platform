@@ -1,3 +1,18 @@
+# Журнал работы — проверка handoff 2026-09-21
+
+## Подтверждено после получения handoff
+- Удалённая ветка `feat/conversation-relationship-layer`, HEAD `501ed0f`, получена с GitHub в отдельную чистую рабочую копию.
+- `npm run verify` → exit 0: 72 core tests, D1 smoke, integration и production build.
+- Migration rehearsal на чистой локальной D1 завершён: миграции `0000`–`0008`, 12 таблиц, повторное применение идемпотентно, rollback probe clean.
+- Исправлен опечатанный production `database_id`; добавлена проверка UUID.
+- `GOOGLE_SHEETS_SPREADSHEET_ID` приведён к заявленному optional-режиму: без него продукт деплоится, `/api/export` возвращает 503.
+
+## До production всё ещё требуется
+- Снять backup/export production D1.
+- Проверить/задать production secrets.
+- Получить явное разрешение владельца на remote migrations и deploy.
+- После deploy выполнить desktop и real-phone smoke.
+
 # Журнал работы — обновлено 2026-09-21 (финал дня)
 
 ## Текущее состояние (точка восстановления)

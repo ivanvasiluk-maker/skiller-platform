@@ -26,9 +26,9 @@ npx wrangler d1 create skiller-d1-prod
 |---|---|
 | `d1_databases[0].database_id` | вывод `wrangler d1 create` |
 | `d1_databases[0].database_name` | `skiller-d1-prod` |
-| `vars.GOOGLE_SHEETS_SPREADSHEET_ID` | ID Google-таблицы-зеркала |
+| `vars.GOOGLE_SHEETS_SPREADSHEET_ID` | Необязательный ID Google-таблицы-зеркала. Без него приложение работает, а `/api/export` возвращает 503. |
 
-Проверка конфига (откажет при плейсхолдерах и при тестовом D1 identity):
+Проверка конфига (откажет при незаполненном/невалидном D1 identity; Sheets ID необязателен):
 
 ```bash
 npm run deploy:check

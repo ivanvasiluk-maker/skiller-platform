@@ -14,11 +14,11 @@
     {
       "binding": "DB",
       "database_name": "skiller-d1-prod",
-      "database_id": "fdc386c6-094f-473a-8402-cc58d6cb5c37-cc58d6cb5c37",
+      "database_id": "fdc386c6-094f-473a-8402-cc58d6cb5c37",
       "migrations_dir": "drizzle"
     }
   ],
   "vars": {
-    "GOOGLE_SHEETS_SPREADSHEET_ID": "REPLACE_WITH_SPREADSHEET_ID"
+    "GOOGLE_SHEETS_SPREADSHEET_ID": ""
   }
 }
