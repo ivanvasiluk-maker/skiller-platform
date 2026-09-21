@@ -1,3 +1,28 @@
+# Журнал работы — обновлено 2026-09-21 (финал дня)
+
+## Текущее состояние (точка восстановления)
+Ветка `feat/conversation-relationship-layer`, HEAD `7490228`, чистое дерево, `npm run verify` → exit 0 (12 таблиц). Запушено на GitHub.
+
+## Сделано 2026-09-21 (день 2)
+- **Спринт 10**: orchestrator-instructions timeout → deterministic fallback в integration; safety/fallback не зависят от LLM (5/5 PASS).
+- **Спринт 11**: PATCH 1.1 события (loop_id/outcome) экспортируются в Sheets, приватный текст не уходит (allowlist +loop_id/outcome); sheets-export тест расширен.
+- **Спринт 12**: labels на capture-selects (htmlFor/id), responsive/mobile CSS (trainer-chip/composer/messages на ≤760px/≤480px). Build PASS.
+- **Спринт 13 ч.3 (частично)**: production `database_id` заполнен (fdc386c6-094f-473a-8402-cc58d6cb5c37, skiller-d1-prod, создана 2026-09-17). `wrangler` залогинен (ivan.vasiluk@gmail.com). Production build PASS.
+
+## БЛОКЕР деплоя
+`GOOGLE_SHEETS_SPREADSHEET_ID` — отсутствует в репозитории/.env.local/docs. Это секрет/ID Google-таблицы-зеркала, должен предоставить владелец. Без него `npm run deploy:check` отказывает (по дизайну). Деплой невозможен до его получения.
+
+## Что НЕ сделано
+- **Спринт 14**: deploy + post-deploy smoke (ждёт GOOGLE_SHEETS_SPREADSHEET_ID).
+- **Спринт 15**: финальная передача (PR, screenshots, rollback).
+- Real-phone smoke (нужно физическое устройство).
+
+## Как продолжить
+1. Получить `GOOGLE_SHEETS_SPREADSHEET_ID` от владельца → вписать в `wrangler.production.jsonc` → `npm run deploy:check` → `npm run deploy`.
+2. Задать секреты: `wrangler secret put OPENAI_API_KEY / GOOGLE_SERVICE_ACCOUNT_JSON / EXPORT_CRON_SECRET --config wrangler.production.jsonc`.
+3. Post-deploy smoke по docs/DEPLOY.md §5.
+
+---
 # Журнал работы — обновлено 2026-09-21
 
 ## Текущее состояние (точка восстановления)
