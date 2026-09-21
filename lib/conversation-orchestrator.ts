@@ -68,6 +68,9 @@ function plusHours(hours: number) {
   return new Date(Date.now() + hours * 60 * 60 * 1000).toISOString();
 }
 
+// nowIso экспортируется для переиспользования в memory-функциях ниже.
+export { nowIso as _nowIso };
+
 /** Короткая тема договорённости из текста пользователя (без полного текста в аналитику). */
 export function topicFromText(text: string): string {
   const compact = text.replace(/\s+/g, " ").trim();
@@ -176,6 +179,115 @@ export async function openLoopForPlan(planId: string): Promise<OpenLoop | null> 
       .bind(planId)
       .first<OpenLoop>()) ?? null
   );
+}
+
+// ---------------------------------------------------------------------------
+// PATCH 1.1 память: success factors + intervention memory (миграция 0008).
+// ---------------------------------------------------------------------------
+
+export type SuccessFactor = {
+  id: string;
+  user_id: string;
+  loop_id: string | null;
+  factor: string;
+  created_at: string;
+};
+
+export type InterventionMemoryEntry = {
+  id: string;
+  user_id: string;
+  skill_id: string;
+  loop_id: string | null;
+  outcome: string;
+  rejection_reason: string;
+  missing_link: string;
+  chain_break_point: string;
+  created_at: string;
+};
+
+export const MEMORY_STATEMENTS = [
+  `CREATE TABLE IF NOT EXISTS success_factors (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    loop_id TEXT,
+    factor TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS success_factors_user ON success_factors(user_id, created_at)",
+  `CREATE TABLE IF NOT EXISTS intervention_memory (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    skill_id TEXT NOT NULL,
+    loop_id TEXT,
+    outcome TEXT NOT NULL,
+    rejection_reason TEXT NOT NULL DEFAULT '',
+    missing_link TEXT NOT NULL DEFAULT '',
+    chain_break_point TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  )`,
+  "CREATE INDEX IF NOT EXISTS intervention_memory_user_skill ON intervention_memory(user_id, skill_id, created_at)",
+];
+
+export async function ensureMemoryStorage() {
+  const db = getRawDb();
+  await db.batch(MEMORY_STATEMENTS.map((s) => db.prepare(s)));
+}
+
+export async function saveSuccessFactor(input: { userId: string; loopId: string | null; factor: string }) {
+  await ensureMemoryStorage();
+  const factor = input.factor.trim().slice(0, 300);
+  if (!factor) return;
+  await getRawDb()
+    .prepare("INSERT INTO success_factors (id,user_id,loop_id,factor,created_at) VALUES (?,?,?,?,?)")
+    .bind(crypto.randomUUID(), input.userId, input.loopId, factor, nowIso())
+    .run();
+}
+
+export async function listSuccessFactors(userId: string): Promise<string[]> {
+  await ensureMemoryStorage();
+  const rows = await getRawDb()
+    .prepare("SELECT factor FROM success_factors WHERE user_id=? ORDER BY created_at DESC LIMIT 8")
+    .bind(userId)
+    .all<{ factor: string }>();
+  return rows.results.map((r) => r.factor);
+}
+
+export async function saveInterventionMemory(input: {
+  userId: string;
+  skillId: string;
+  loopId: string | null;
+  outcome: string;
+  rejectionReason?: string;
+  missingLink?: string;
+  chainBreakPoint?: string;
+}) {
+  await ensureMemoryStorage();
+  await getRawDb()
+    .prepare(
+      "INSERT INTO intervention_memory (id,user_id,skill_id,loop_id,outcome,rejection_reason,missing_link,chain_break_point,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+    )
+    .bind(
+      crypto.randomUUID(),
+      input.userId,
+      input.skillId,
+      input.loopId,
+      input.outcome,
+      (input.rejectionReason ?? "").trim().slice(0, 300),
+      (input.missingLink ?? "").trim().slice(0, 300),
+      (input.chainBreakPoint ?? "").trim().slice(0, 300),
+      nowIso(),
+    )
+    .run();
+}
+
+/** Скиллы, которые пользователь отклонил / провалил — не предлагать повторно без нового основания. */
+export async function rejectedSkillIds(userId: string): Promise<string[]> {
+  await ensureMemoryStorage();
+  const rows = await getRawDb()
+    .prepare("SELECT DISTINCT skill_id FROM intervention_memory WHERE user_id=? AND outcome IN ('skill_rejected','not_done')")
+    .bind(userId)
+    .all<{ skill_id: string }>();
+  return rows.results.map((r) => r.skill_id);
 }
 
 // ---------------------------------------------------------------------------

@@ -1071,6 +1071,20 @@ async function runRelationshipCycle(db: D1Database) {
   await command(userNotDone, sNotDone, { action: "outcome", planId: planNotDone.id, result: "failed", helpfulness: 3 });
   const evNotDone = await eventsFor(sitNotDone.profile?.pseudonym ?? "");
 
+  // Персистентная память: success factor (DONE) и intervention memory (PARTIAL/NOT_DONE).
+  const successFactors = await db
+    .prepare("SELECT count(*) AS count FROM success_factors WHERE user_id=?")
+    .bind(userDone.userId)
+    .first<{ count: number }>();
+  const interventionPartial = await db
+    .prepare("SELECT outcome, chain_break_point FROM intervention_memory WHERE user_id=?")
+    .bind(userPartial.userId)
+    .first<{ outcome: string; chain_break_point: string }>();
+  const interventionNotDone = await db
+    .prepare("SELECT outcome, missing_link FROM intervention_memory WHERE user_id=?")
+    .bind(userNotDone.userId)
+    .first<{ outcome: string; missing_link: string }>();
+
   return {
     loopCreatedDone,
     resolvedDone: resolvedDone ?? null,
@@ -1079,6 +1093,9 @@ async function runRelationshipCycle(db: D1Database) {
       success_factor: evDone.has("success_factor_identified"),
       open_loop_resolved: evDone.has("open_loop_resolved"),
     },
+    successFactorsStored: Number(successFactors?.count ?? 0),
+    interventionPartial: interventionPartial ?? null,
+    interventionNotDone: interventionNotDone ?? null,
     followUp: {
       shown: evFup.has("follow_up_shown"),
       answered: evFup.has("follow_up_answered"),

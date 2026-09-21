@@ -497,6 +497,9 @@ try {
       success_factor: true,
       open_loop_resolved: true,
     },
+    successFactorsStored: 1,
+    interventionPartial: { outcome: "partial", chain_break_point: "точка остановки уточняется" },
+    interventionNotDone: { outcome: "not_done", missing_link: "разрыв цепочки уточняется" },
     followUp: {
       shown: true,
       answered: true,

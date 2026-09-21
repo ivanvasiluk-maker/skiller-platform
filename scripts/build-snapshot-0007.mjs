@@ -59,3 +59,63 @@ writeFileSync(
   JSON.stringify(out, null, 2),
 );
 console.log(`0007_snapshot.json written, tables: ${Object.keys(out.tables).length}, id: ${out.id}, prevId: ${out.prevId}`);
+
+// --- 0008: success_factors + intervention_memory поверх 0007 ---
+
+const successFactors = {
+  name: "success_factors",
+  columns: {
+    id: col("id", "text", { pk: true }),
+    user_id: col("user_id", "text"),
+    loop_id: col("loop_id", "text", { nn: false }),
+    factor: col("factor", "text"),
+    created_at: col("created_at", "text"),
+  },
+  indexes: {
+    success_factors_user: { name: "success_factors_user", columns: ["user_id", "created_at"], isUnique: false },
+  },
+  foreignKeys: {},
+  compositePrimaryKeys: {},
+  uniqueConstraints: {},
+  checkConstraints: {},
+};
+
+const interventionMemory = {
+  name: "intervention_memory",
+  columns: {
+    id: col("id", "text", { pk: true }),
+    user_id: col("user_id", "text"),
+    skill_id: col("skill_id", "text"),
+    loop_id: col("loop_id", "text", { nn: false }),
+    outcome: col("outcome", "text"),
+    rejection_reason: col("rejection_reason", "text", { def: "" }),
+    missing_link: col("missing_link", "text", { def: "" }),
+    chain_break_point: col("chain_break_point", "text", { def: "" }),
+    created_at: col("created_at", "text"),
+  },
+  indexes: {
+    intervention_memory_user_skill: { name: "intervention_memory_user_skill", columns: ["user_id", "skill_id", "created_at"], isUnique: false },
+  },
+  foreignKeys: {},
+  compositePrimaryKeys: {},
+  uniqueConstraints: {},
+  checkConstraints: {},
+};
+
+const out8 = {
+  version: "6",
+  dialect: "sqlite",
+  id: crypto.randomUUID(),
+  prevId: out.id,
+  tables: { ...out.tables, success_factors: successFactors, intervention_memory: interventionMemory },
+  views: {},
+  enums: {},
+  _meta: { schemas: {}, tables: {}, columns: {} },
+  internal: { indexes: {} },
+};
+
+writeFileSync(
+  path.join(root, "drizzle/meta/0008_snapshot.json"),
+  JSON.stringify(out8, null, 2),
+);
+console.log(`0008_snapshot.json written, tables: ${Object.keys(out8.tables).length}, id: ${out8.id}, prevId: ${out8.prevId}`);
