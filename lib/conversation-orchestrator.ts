@@ -52,6 +52,9 @@ export const OPEN_LOOP_STATEMENTS = [
   "CREATE UNIQUE INDEX IF NOT EXISTS open_loops_plan_active ON open_loops(plan_id) WHERE status IN ('active','answered')",
 ];
 
+// Источник схемы — drizzle/0007_open_loops.sql. Этот вызов лишь безопасно
+// догоняет таблицу в средах, где миграции ещё не применены (локальные smoke,
+// старые тестовые БД). В production схема идёт только через drizzle migrations.
 export async function ensureOpenLoopStorage() {
   const db = getRawDb();
   await db.batch(OPEN_LOOP_STATEMENTS.map((s) => db.prepare(s)));
