@@ -501,8 +501,13 @@ try {
       open_loop_resolved: true,
     },
     successFactorsStored: 1,
-    interventionPartial: { outcome: "partial", chain_break_point: "точка остановки уточняется" },
-    interventionNotDone: { outcome: "not_done", missing_link: "разрыв цепочки уточняется" },
+    interventionPartial: { outcome: "partial", chain_break_point: "Остановился после первого абзаца" },
+    interventionNotDone: { outcome: "not_done", missing_link: "Не открыл документ из-за уведомлений" },
+    interventionRejected: {
+      outcome: "skill_rejected",
+      rejection_reason: "Слишком много шагов и непонятные слова",
+    },
+    rejectedEvent: true,
     followUp: {
       shown: true,
       answered: true,

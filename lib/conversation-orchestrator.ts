@@ -205,6 +205,20 @@ export type InterventionMemoryEntry = {
   created_at: string;
 };
 
+export type ConversationFollowUpKind = "success" | "chain" | "missing_link" | "rejection";
+export type ConversationFollowUp = {
+  id: string;
+  user_id: string;
+  plan_id: string;
+  loop_id: string | null;
+  skill_id: string;
+  kind: ConversationFollowUpKind;
+  status: "pending" | "completed";
+  answer: string;
+  prompted_at: string;
+  answered_at: string | null;
+};
+
 export const MEMORY_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS success_factors (
     id TEXT PRIMARY KEY,
@@ -226,6 +240,19 @@ export const MEMORY_STATEMENTS = [
     created_at TEXT NOT NULL
   )`,
   "CREATE INDEX IF NOT EXISTS intervention_memory_user_skill ON intervention_memory(user_id, skill_id, created_at)",
+  `CREATE TABLE IF NOT EXISTS conversation_followups (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    plan_id TEXT NOT NULL,
+    loop_id TEXT,
+    skill_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    answer TEXT NOT NULL DEFAULT '',
+    prompted_at TEXT NOT NULL,
+    answered_at TEXT
+  )`,
+  "CREATE INDEX IF NOT EXISTS conversation_followups_user_status ON conversation_followups(user_id, status, prompted_at)",
 ];
 
 export async function ensureMemoryStorage() {
@@ -278,6 +305,49 @@ export async function saveInterventionMemory(input: {
       nowIso(),
     )
     .run();
+}
+
+export async function createConversationFollowUp(input: {
+  userId: string;
+  planId: string;
+  loopId: string | null;
+  skillId: string;
+  kind: ConversationFollowUpKind;
+}): Promise<ConversationFollowUp> {
+  await ensureMemoryStorage();
+  const existing = await getRawDb()
+    .prepare("SELECT * FROM conversation_followups WHERE user_id=? AND status='pending' ORDER BY prompted_at DESC LIMIT 1")
+    .bind(input.userId)
+    .first<ConversationFollowUp>();
+  if (existing) return existing;
+  const followUp: ConversationFollowUp = {
+    id: crypto.randomUUID(), user_id: input.userId, plan_id: input.planId,
+    loop_id: input.loopId, skill_id: input.skillId, kind: input.kind,
+    status: "pending", answer: "", prompted_at: nowIso(), answered_at: null,
+  };
+  await getRawDb().prepare(
+    "INSERT INTO conversation_followups (id,user_id,plan_id,loop_id,skill_id,kind,status,answer,prompted_at) VALUES (?,?,?,?,?,?,?,?,?)",
+  ).bind(
+    followUp.id, followUp.user_id, followUp.plan_id, followUp.loop_id,
+    followUp.skill_id, followUp.kind, followUp.status, followUp.answer,
+    followUp.prompted_at,
+  ).run();
+  return followUp;
+}
+
+export async function pendingConversationFollowUp(userId: string): Promise<ConversationFollowUp | null> {
+  await ensureMemoryStorage();
+  return (await getRawDb()
+    .prepare("SELECT * FROM conversation_followups WHERE user_id=? AND status='pending' ORDER BY prompted_at DESC LIMIT 1")
+    .bind(userId)
+    .first<ConversationFollowUp>()) ?? null;
+}
+
+export async function completeConversationFollowUp(id: string, answer: string) {
+  await ensureMemoryStorage();
+  await getRawDb().prepare(
+    "UPDATE conversation_followups SET status='completed',answer=?,answered_at=? WHERE id=? AND status='pending'",
+  ).bind(answer.trim().slice(0, 800), nowIso(), id).run();
 }
 
 /** Скиллы, которые пользователь отклонил / провалил — не предлагать повторно без нового основания. */

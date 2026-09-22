@@ -897,6 +897,7 @@ async function runAdjustmentCycle(db: D1Database) {
   const replacedPlan = afterReplace.plans[0];
   await command(userA, sessionA, { action: "start", planId: replacedPlan.id });
   await command(userA, sessionA, { action: "outcome", planId: replacedPlan.id, result: "done", helpfulness: 7 });
+  await command(userA, sessionA, { action: "message", mode: "talk", text: "Помогло убрать телефон со стола" });
   const afterRepeat = await command(userA, sessionA, {
     action: "situation", mode: "stuck", kind: "stuck", signal: "thought",
     urge: "distract", intensity: 5, risk: "no",
@@ -966,6 +967,7 @@ async function runWeekCycle(db: D1Database) {
   const pseudonym = day1.profile?.pseudonym ?? "";
   await command({ action: "start", planId: plan1.id });
   await command({ action: "outcome", planId: plan1.id, result: "done", helpfulness: 7 });
+  await command({ action: "message", mode: "talk", text: "Помогло заранее открыть документ" });
   // Доказательство для transfer на Day 5: distract-delay помог в конфликте.
   await seedOutcome(db, user.userId, "distract-delay", "conflict", { completed: true, helpfulness: 7, avoidance: false });
 
@@ -996,6 +998,7 @@ async function runWeekCycle(db: D1Database) {
   const plan2 = day4.plans[0];
   await command({ action: "start", planId: plan2.id });
   await command({ action: "outcome", planId: plan2.id, result: "done", helpfulness: 8 });
+  await command({ action: "message", mode: "talk", text: "Помогло начать с одного заголовка" });
 
   // Day 5: transfer — другой вход, доказательство из конфликтного контекста.
   await setDay(5);
@@ -1003,6 +1006,7 @@ async function runWeekCycle(db: D1Database) {
   const plan3 = day5.plans[0];
   await command({ action: "start", planId: plan3.id });
   await command({ action: "outcome", planId: plan3.id, result: "failed", helpfulness: 3 });
+  await command({ action: "message", mode: "talk", text: "Отвлекло входящее сообщение" });
 
   // Day 6: replacement после неудачной попытки.
   await setDay(6);
@@ -1015,6 +1019,7 @@ async function runWeekCycle(db: D1Database) {
   const afterSwitch = await command({ action: "settings", trainerId: "skinny" });
   await command({ action: "start", planId: plan4.id });
   await command({ action: "outcome", planId: plan4.id, result: "done", helpfulness: 7 });
+  await command({ action: "message", mode: "talk", text: "Помог короткий и конкретный шаг" });
   await command({ action: "feedback", helpfulness: 8, understood: 9, continueIntent: 7, helped: "Маленькие шаги", annoyed: "" });
   const feedbackRow = await db
     .prepare("SELECT count(*) AS count FROM pilot_feedback WHERE user_id=?")
@@ -1078,6 +1083,7 @@ async function runRelationshipCycle(db: D1Database) {
   const loopCreatedDone = sitDone.openLoops.length === 1;
   await command(userDone, sDone, { action: "start", planId: planDone.id });
   await command(userDone, sDone, { action: "outcome", planId: planDone.id, result: "done", helpfulness: 8 });
+  await command(userDone, sDone, { action: "message", mode: "talk", text: "Помогло заранее открыть документ" });
   const evDone = await eventsFor(sitDone.profile?.pseudonym ?? "");
   const resolvedDone = await db.prepare("SELECT status, outcome FROM open_loops WHERE plan_id=?").bind(planDone.id).first<{ status: string; outcome: string }>();
 
@@ -1101,6 +1107,7 @@ async function runRelationshipCycle(db: D1Database) {
   const planPartial = sitPartial.plans[0];
   await command(userPartial, sPartial, { action: "start", planId: planPartial.id });
   await command(userPartial, sPartial, { action: "outcome", planId: planPartial.id, result: "partial", helpfulness: 5 });
+  await command(userPartial, sPartial, { action: "message", mode: "talk", text: "Остановился после первого абзаца" });
   const evPartial = await eventsFor(sitPartial.profile?.pseudonym ?? "");
 
   // NOT_DONE ветка
@@ -1111,7 +1118,18 @@ async function runRelationshipCycle(db: D1Database) {
   const planNotDone = sitNotDone.plans[0];
   await command(userNotDone, sNotDone, { action: "start", planId: planNotDone.id });
   await command(userNotDone, sNotDone, { action: "outcome", planId: planNotDone.id, result: "failed", helpfulness: 3 });
+  await command(userNotDone, sNotDone, { action: "message", mode: "talk", text: "Не открыл документ из-за уведомлений" });
   const evNotDone = await eventsFor(sitNotDone.profile?.pseudonym ?? "");
+
+  // SKILL_REJECTED ветка: не защищаем рекомендацию, сохраняем причину.
+  const userRejected = makeUser("rejected");
+  const sRejected = crypto.randomUUID();
+  await command(userRejected, sRejected, { action: "onboard", name: "Р", trainerId: "marsha", text: "Не подходит упражнение", consent: true });
+  const sitRejected = await command(userRejected, sRejected, { action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 4, risk: "no", text: "Нужно ответить на письмо" });
+  const planRejected = sitRejected.plans[0];
+  await command(userRejected, sRejected, { action: "reject", planId: planRejected.id });
+  await command(userRejected, sRejected, { action: "message", mode: "talk", text: "Слишком много шагов и непонятные слова" });
+  const evRejected = await eventsFor(sitRejected.profile?.pseudonym ?? "");
 
   // Персистентная память: success factor (DONE) и intervention memory (PARTIAL/NOT_DONE).
   const successFactors = await db
@@ -1126,6 +1144,10 @@ async function runRelationshipCycle(db: D1Database) {
     .prepare("SELECT outcome, missing_link FROM intervention_memory WHERE user_id=?")
     .bind(userNotDone.userId)
     .first<{ outcome: string; missing_link: string }>();
+  const interventionRejected = await db
+    .prepare("SELECT outcome, rejection_reason FROM intervention_memory WHERE user_id=?")
+    .bind(userRejected.userId)
+    .first<{ outcome: string; rejection_reason: string }>();
 
   return {
     loopCreatedDone,
@@ -1138,6 +1160,8 @@ async function runRelationshipCycle(db: D1Database) {
     successFactorsStored: Number(successFactors?.count ?? 0),
     interventionPartial: interventionPartial ?? null,
     interventionNotDone: interventionNotDone ?? null,
+    interventionRejected: interventionRejected ?? null,
+    rejectedEvent: evRejected.has("skill_rejected"),
     followUp: {
       shown: evFup.has("follow_up_shown"),
       answered: evFup.has("follow_up_answered"),

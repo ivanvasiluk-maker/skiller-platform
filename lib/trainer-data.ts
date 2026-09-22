@@ -6,7 +6,7 @@ import { ensureUser, recommendSkill, startAttempt, completeAttempt, completeOnbo
 import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-idempotency";
 import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-continuity";
 import { produceFreeTalkReply } from "@/lib/free-talk";
-import { ensureOpenLoopStorage, createOpenLoop, dueOpenLoop, markFollowUpShown, markFollowUpAnswered, resolveOpenLoop, openLoopForPlan, buildConversationContext, buildOrchestratorInstructions, topicFromText, activeOpenLoops, saveSuccessFactor, saveInterventionMemory, type OpenLoop } from "@/lib/conversation-orchestrator";
+import { ensureOpenLoopStorage, createOpenLoop, dueOpenLoop, markFollowUpShown, markFollowUpAnswered, resolveOpenLoop, openLoopForPlan, buildConversationContext, buildOrchestratorInstructions, topicFromText, activeOpenLoops, saveSuccessFactor, saveInterventionMemory, createConversationFollowUp, pendingConversationFollowUp, completeConversationFollowUp, type OpenLoop, type ConversationFollowUp } from "@/lib/conversation-orchestrator";
 import { concreteActionFromText } from "@/lib/conversation-language";
 import type { OutcomeReasonCode } from "@/lib/outcome-policy";
 import { recordPilotEvent, type PilotEventPayload } from "@/lib/pilot-events";
@@ -17,7 +17,7 @@ import { trainers, PRODUCT_VERSION, dayIndex, requiresSafetyRoute, safetyMessage
 export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
 export type TrainerMessage = { id: string; role: "user" | "assistant"; text: string; trainer_id: TrainerId; created_at: string };
 export type TrainerPlan = { id: string; situation_id: string; skill_json: string; skill_title: string; entry_mode: string; intensity_before: number; intensity_after: number | null; attempt_id: string | null; result: "done" | "failed" | "more" | null; helpfulness: number | null; decision_reason_code: OutcomeReasonCode; decision_version: string; created_at: string };
-export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity; openLoops: OpenLoop[]; dueLoop: OpenLoop | null };
+export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity; openLoops: OpenLoop[]; dueLoop: OpenLoop | null; pendingFollowUp: ConversationFollowUp | null };
 
 const statements = [
   "CREATE TABLE IF NOT EXISTS trainer_profiles (user_id TEXT PRIMARY KEY, pseudonym TEXT NOT NULL UNIQUE, name TEXT NOT NULL, trainer_id TEXT NOT NULL, interaction_mode TEXT NOT NULL DEFAULT 'explore', main_problem TEXT NOT NULL, consent_version TEXT NOT NULL, created_at TEXT NOT NULL, last_interaction_at TEXT NOT NULL, safety_flag INTEGER NOT NULL DEFAULT 0)",
@@ -57,13 +57,14 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
   await ensureOpenLoopStorage();
   const db = getRawDb();
   const profile = await profileFor(user.userId);
-  if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [], continuity: buildTrainerContinuity([]), openLoops: [], dueLoop: null };
-  const [messages, plans, days, loops, due] = await Promise.all([
+  if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [], continuity: buildTrainerContinuity([]), openLoops: [], dueLoop: null, pendingFollowUp: null };
+  const [messages, plans, days, loops, due, pendingFollowUp] = await Promise.all([
     db.prepare("SELECT * FROM (SELECT id,role,text,trainer_id,created_at FROM trainer_messages WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 60) ORDER BY created_at,id").bind(user.userId).all<TrainerMessage>(),
     db.prepare("SELECT * FROM trainer_plans WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100").bind(user.userId).all<TrainerPlan>(),
     db.prepare("SELECT DISTINCT day_index FROM pilot_events WHERE user_id=? AND event_name='engaged_return' ORDER BY day_index").bind(profile.pseudonym).all<{ day_index: number }>(),
     activeOpenLoops(user.userId),
     dueOpenLoop(user.userId),
+    pendingConversationFollowUp(user.userId),
   ]);
   const day = dayIndex(profile.created_at);
   const engagedDays = days.results.map((entry) => entry.day_index);
@@ -82,6 +83,7 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
     }),
     openLoops: loops,
     dueLoop: due,
+    pendingFollowUp,
   };
 }
 async function event(
@@ -116,7 +118,7 @@ async function message(profile: TrainerProfile, role: "user" | "assistant", text
 }
 
 const bodySchema = z.object({
-  action: z.enum(["onboard", "settings", "open", "message", "situation", "start", "outcome", "resize", "replace", "recap", "feedback", "safeAgain"]),
+  action: z.enum(["onboard", "settings", "open", "message", "situation", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain"]),
   requestId: z.string().uuid(), sessionId: z.string().uuid(),
   name: z.string().trim().min(1).max(60).optional(), trainerId: z.enum(["marsha", "beck", "skinny"]).optional(),
   interactionMode: z.enum(["support", "explore", "direct"]).optional(), text: z.string().trim().max(1200).optional(), consent: z.boolean().optional(),
@@ -175,6 +177,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
       await message(profile, "user", body.text, `${key}:user`);
       await event(profile, body.sessionId, "message_sent", key);
       await engage(profile, body.sessionId);
+      const pendingAnalysis = await pendingConversationFollowUp(user.userId);
       // PATCH 1.1: при входе приоритет отдаём due open loop — продолжение вчерашнего разговора.
       const due = await dueOpenLoop(user.userId);
       if (due) {
@@ -191,6 +194,25 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         await db.prepare("UPDATE trainer_profiles SET safety_flag=1 WHERE user_id=?").bind(user.userId).run();
         await message(profile, "assistant", safetyMessage, `${key}:reply`);
         await event(profile, body.sessionId, "safety_flow_used", key);
+      } else if (pendingAnalysis) {
+        const answer = body.text.trim();
+        if (pendingAnalysis.kind === "success") {
+          await saveSuccessFactor({ userId: user.userId, loopId: pendingAnalysis.loop_id, factor: answer });
+          await event(profile, body.sessionId, "success_factor_identified", pendingAnalysis.id, { loop_id: pendingAnalysis.loop_id ?? pendingAnalysis.plan_id });
+          await message(profile, "assistant", `Сохранил: «${answer}». В похожей ситуации я напомню об этом как о том, что уже помогало.`, `${key}:reply`);
+        } else if (pendingAnalysis.kind === "chain") {
+          await saveInterventionMemory({ userId: user.userId, skillId: pendingAnalysis.skill_id, loopId: pendingAnalysis.loop_id, outcome: "partial", chainBreakPoint: answer });
+          await event(profile, body.sessionId, "chain_analysis_completed", pendingAnalysis.id, { loop_id: pendingAnalysis.loop_id ?? pendingAnalysis.plan_id });
+          await message(profile, "assistant", `Понял точку остановки: «${answer}». Следующий шаг будем подбирать именно от этого места, а не начинать разбор заново.`, `${key}:reply`);
+        } else if (pendingAnalysis.kind === "missing_link") {
+          await saveInterventionMemory({ userId: user.userId, skillId: pendingAnalysis.skill_id, loopId: pendingAnalysis.loop_id, outcome: "not_done", missingLink: answer });
+          await event(profile, body.sessionId, "missing_link_completed", pendingAnalysis.id, { loop_id: pendingAnalysis.loop_id ?? pendingAnalysis.plan_id });
+          await message(profile, "assistant", `Теперь понятнее, где оборвалась цепочка: «${answer}». Я учту это перед следующим предложением, вместо автоматической замены навыка.`, `${key}:reply`);
+        } else {
+          await saveInterventionMemory({ userId: user.userId, skillId: pendingAnalysis.skill_id, loopId: pendingAnalysis.loop_id, outcome: "skill_rejected", rejectionReason: answer });
+          await message(profile, "assistant", `Спасибо, причина понятна: «${answer}». Этот шаг не буду защищать или повторять без нового основания.`, `${key}:reply`);
+        }
+        await completeConversationFollowUp(pendingAnalysis.id, answer);
       } else if (body.action === "message") {
         await event(profile, body.sessionId, "free_talk_started", body.sessionId);
         await event(profile, body.sessionId, "chat_started", body.sessionId);
@@ -238,7 +260,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         }
       }
     }
-    if (["start", "outcome", "resize", "replace"].includes(body.action)) {
+    if (["start", "outcome", "reject", "resize", "replace"].includes(body.action)) {
       const plan = await db.prepare("SELECT * FROM trainer_plans WHERE id=? AND user_id=?").bind(body.planId ?? "", user.userId).first<TrainerPlan>();
       if (!plan) throw new Error("Практика не найдена.");
       if (profile.safety_flag) throw new Error("Сначала завершите проверку безопасности.");
@@ -248,6 +270,16 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         await db.prepare("UPDATE trainer_plans SET attempt_id=? WHERE id=? AND user_id=?").bind(attempt.attemptId, plan.id, user.userId).run();
         await event(profile, body.sessionId, "action_started", plan.id, { skill_id: skill.id });
         await engage(profile, body.sessionId);
+      }
+      if (body.action === "reject" && !plan.result) {
+        const loop = await openLoopForPlan(plan.id);
+        const loopId = loop?.id ?? plan.id;
+        await db.prepare("UPDATE trainer_plans SET result='failed',helpfulness=0 WHERE id=? AND user_id=? AND result IS NULL").bind(plan.id, user.userId).run();
+        await event(profile, body.sessionId, "skill_rejected", loopId, { loop_id: loopId, skill_id: skill.id });
+        if (loop) await resolveOpenLoop(loop.id, "skill_rejected");
+        await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "skill_rejected" });
+        await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "rejection" });
+        await message(profile, "assistant", "Хорошо, не буду убеждать Вас использовать этот шаг. Что именно не подошло: формулировка, само действие, момент или что-то другое?", `${key}:reply`);
       }
       if (body.action === "outcome" && !plan.result) {
         if (!plan.attempt_id || !body.result || body.helpfulness === undefined || (plan.entry_mode === "distress" && body.intensity === undefined)) throw new Error("Начните практику и укажите результат.");
@@ -271,29 +303,26 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         const loopId = loop?.id ?? plan.id;
         if (body.result === "done") {
           await event(profile, body.sessionId, "outcome_done", loopId, { loop_id: loopId });
-          await saveSuccessFactor({ userId: user.userId, loopId: loop?.id ?? null, factor: `«${skill.title}» сработал при «${loop?.topic ?? plan.skill_title}»` });
-          await event(profile, body.sessionId, "success_factor_identified", loopId, { loop_id: loopId });
           if (loop) await resolveOpenLoop(loop.id, "done");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "done" });
+          await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "success" });
           await message(profile, "assistant", `${trainers[profile.trainer_id].success} Что помогло больше всего? Я сохраню это как полезный фактор.`, `${key}:reply`);
         } else if (body.result === "partial") {
           // PATCH 1.1: PARTIAL → точка остановки → Behavioral Chain Analysis.
           await event(profile, body.sessionId, "outcome_partial", loopId, { loop_id: loopId });
           await event(profile, body.sessionId, "chain_analysis_started", loopId, { loop_id: loopId });
-          await saveInterventionMemory({ userId: user.userId, skillId: skill.id, loopId: loop?.id ?? null, outcome: "partial", chainBreakPoint: "точка остановки уточняется" });
           if (loop) await resolveOpenLoop(loop.id, "partial");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "partial" });
+          await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "chain" });
           await message(profile, "assistant", "Частично — это уже результат. На каком моменте получилось остановиться? Посмотрим, что произошло прямо перед этим, и найдём подходящую точку продолжения.", `${key}:reply`);
-          await event(profile, body.sessionId, "chain_analysis_completed", loopId, { loop_id: loopId });
         } else if (body.result === "failed") {
           // PATCH 1.1: NOT_DONE → Missing Link Analysis без автозамены skill.
           await event(profile, body.sessionId, "outcome_not_done", loopId, { loop_id: loopId });
           await event(profile, body.sessionId, "missing_link_started", loopId, { loop_id: loopId });
-          await saveInterventionMemory({ userId: user.userId, skillId: skill.id, loopId: loop?.id ?? null, outcome: "not_done", missingLink: "разрыв цепочки уточняется" });
           if (loop) await resolveOpenLoop(loop.id, "not_done");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "not_done" });
+          await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "missing_link" });
           await message(profile, "assistant", `${trainers[profile.trainer_id].failure} Где именно прервалось действие: не получилось начать, что-то отвлекло или шаг оказался слишком большим? Сначала уточним это, затем выберем следующий шаг.`, `${key}:reply`);
-          await event(profile, body.sessionId, "missing_link_completed", loopId, { loop_id: loopId });
         } else {
           // more → трактуем как done с превышением плана
           await event(profile, body.sessionId, "outcome_done", loopId, { loop_id: loopId });
