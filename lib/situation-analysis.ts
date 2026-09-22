@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { meaningfulVoiceTranscript } from "./voice-transcript.ts";
 
 export type SituationChain = {
   context: string;
@@ -108,8 +109,14 @@ export async function transcribeAudio(file: File): Promise<{ text: string }> {
 
   const data = (await readJson(response)) as { text?: unknown };
   if (!response.ok) throw toOpenAIError(response.status, data, "Не удалось расшифровать аудио");
-  const text = typeof data.text === "string" ? data.text.trim() : "";
-  if (!text) throw new OpenAIRequestError("OpenAI вернул пустую расшифровку", response.status, "empty_transcript");
+  const text = meaningfulVoiceTranscript(typeof data.text === "string" ? data.text : "");
+  if (!text) {
+    throw new OpenAIRequestError(
+      "Не удалось расслышать речь. Запишите сообщение ещё раз или напишите текстом.",
+      response.status,
+      "empty_transcript",
+    );
+  }
   return { text: text.slice(0, 4000) };
 }
 

@@ -7,6 +7,7 @@ import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-i
 import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-continuity";
 import { produceFreeTalkReply } from "@/lib/free-talk";
 import { ensureOpenLoopStorage, createOpenLoop, dueOpenLoop, markFollowUpShown, markFollowUpAnswered, resolveOpenLoop, openLoopForPlan, buildConversationContext, buildOrchestratorInstructions, topicFromText, activeOpenLoops, saveSuccessFactor, saveInterventionMemory, type OpenLoop } from "@/lib/conversation-orchestrator";
+import { concreteActionFromText } from "@/lib/conversation-language";
 import type { OutcomeReasonCode } from "@/lib/outcome-policy";
 import { recordPilotEvent, type PilotEventPayload } from "@/lib/pilot-events";
 import { skillCardVersion } from "@/lib/skill-card-versions";
@@ -199,7 +200,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           situation: { mode: body.mode ?? "talk" },
         });
         const replyText = due
-          ? `Возвращаюсь к договорённости: «${due.topic}» → ${due.planned_action}. Как прошло — получилось, частично или не сделал?`
+          ? `Возвращаюсь к нашей договорённости: «${due.planned_action}». Как прошло — получилось, частично или не получилось?`
           : await freeTalk(profile, state.messages.slice(-8), buildOrchestratorInstructions(ctx));
         await message(profile, "assistant", replyText, `${key}:reply`);
       } else {
@@ -214,9 +215,14 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         await event(profile, body.sessionId, "situation_submitted", key);
         if (recommendation.skill) {
           const skill = recommendation.skill;
+          const concreteAction = mode === "distress" ? null : concreteActionFromText(body.text);
+          const plannedAction = concreteAction ?? skill.title;
           await db.prepare("INSERT INTO trainer_plans (id,user_id,situation_id,skill_json,skill_title,entry_mode,intensity_before,decision_reason_code,decision_version,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
             .bind(key, user.userId, recommendation.situationId, JSON.stringify(skill), skill.title, mode, body.intensity ?? 5, recommendation.reasonCode ?? "first_try", recommendation.decisionVersion ?? "outcome-policy-v2", new Date().toISOString()).run();
-          await message(profile, "assistant", `${trainers[profile.trainer_id].greeting} ${recommendation.reason ?? ""} Попробуем «${skill.title}».`, `${key}:reply`);
+          const reply = concreteAction
+            ? `Давайте не будем решать всю задачу сразу. Первый шаг: «${concreteAction}». Напишите мне, когда попробуете.`
+            : `${trainers[profile.trainer_id].greeting} Попробуем «${skill.title}».`;
+          await message(profile, "assistant", reply, `${key}:reply`);
           await event(profile, body.sessionId, "skill_recommended", key, { skill_id: skill.id, decision_reason_code: recommendation.reasonCode ?? "first_try", decision_version: recommendation.decisionVersion ?? "outcome-policy-v2" });
           if (recommendation.analysis) await event(profile, body.sessionId, "mechanism_generated", key);
           // PATCH 1.1: сохраняем договорённость как open loop.
@@ -224,7 +230,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
             userId: user.userId,
             planId: key,
             topic: topicFromText(body.text),
-            plannedAction: skill.title,
+            plannedAction,
             entryMode: mode,
             expectedHours: 24,
           });
@@ -269,7 +275,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           await event(profile, body.sessionId, "success_factor_identified", loopId, { loop_id: loopId });
           if (loop) await resolveOpenLoop(loop.id, "done");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "done" });
-          await message(profile, "assistant", `${trainers[profile.trainer_id].success} Что помогло больше всего? Запомню это как твой фактор успеха.`, `${key}:reply`);
+          await message(profile, "assistant", `${trainers[profile.trainer_id].success} Что помогло больше всего? Я сохраню это как полезный фактор.`, `${key}:reply`);
         } else if (body.result === "partial") {
           // PATCH 1.1: PARTIAL → точка остановки → Behavioral Chain Analysis.
           await event(profile, body.sessionId, "outcome_partial", loopId, { loop_id: loopId });
@@ -277,7 +283,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           await saveInterventionMemory({ userId: user.userId, skillId: skill.id, loopId: loop?.id ?? null, outcome: "partial", chainBreakPoint: "точка остановки уточняется" });
           if (loop) await resolveOpenLoop(loop.id, "partial");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "partial" });
-          await message(profile, "assistant", "Частично — это уже факт. На каком моменте ты остановился? Разберём цепочку: триггер → мысль → импульс → действие, и найдём точку остановки.", `${key}:reply`);
+          await message(profile, "assistant", "Частично — это уже результат. На каком моменте получилось остановиться? Посмотрим, что произошло прямо перед этим, и найдём подходящую точку продолжения.", `${key}:reply`);
           await event(profile, body.sessionId, "chain_analysis_completed", loopId, { loop_id: loopId });
         } else if (body.result === "failed") {
           // PATCH 1.1: NOT_DONE → Missing Link Analysis без автозамены skill.
@@ -286,7 +292,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           await saveInterventionMemory({ userId: user.userId, skillId: skill.id, loopId: loop?.id ?? null, outcome: "not_done", missingLink: "разрыв цепочки уточняется" });
           if (loop) await resolveOpenLoop(loop.id, "not_done");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "not_done" });
-          await message(profile, "assistant", `${trainers[profile.trainer_id].failure} Где именно цепочка прервалась: не дошёл до места, отвлёкся или шаг оказался велик? Найдём разрыв — и только потом уменьшим шаг.`, `${key}:reply`);
+          await message(profile, "assistant", `${trainers[profile.trainer_id].failure} Где именно прервалось действие: не получилось начать, что-то отвлекло или шаг оказался слишком большим? Сначала уточним это, затем выберем следующий шаг.`, `${key}:reply`);
           await event(profile, body.sessionId, "missing_link_completed", loopId, { loop_id: loopId });
         } else {
           // more → трактуем как done с превышением плана
