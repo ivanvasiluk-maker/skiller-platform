@@ -203,11 +203,11 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         } else if (pendingAnalysis.kind === "chain") {
           await saveInterventionMemory({ userId: user.userId, skillId: pendingAnalysis.skill_id, loopId: pendingAnalysis.loop_id, outcome: "partial", chainBreakPoint: answer });
           await event(profile, body.sessionId, "chain_analysis_completed", pendingAnalysis.id, { loop_id: pendingAnalysis.loop_id ?? pendingAnalysis.plan_id });
-          await message(profile, "assistant", `Понял точку остановки: «${answer}». Следующий шаг будем подбирать именно от этого места, а не начинать разбор заново.`, `${key}:reply`);
+          await message(profile, "assistant", `Сохранил, где Вы остановились: «${answer}». В следующий раз продолжим с этого места, а не будем начинать разбор заново.`, `${key}:reply`);
         } else if (pendingAnalysis.kind === "missing_link") {
           await saveInterventionMemory({ userId: user.userId, skillId: pendingAnalysis.skill_id, loopId: pendingAnalysis.loop_id, outcome: "not_done", missingLink: answer });
           await event(profile, body.sessionId, "missing_link_completed", pendingAnalysis.id, { loop_id: pendingAnalysis.loop_id ?? pendingAnalysis.plan_id });
-          await message(profile, "assistant", `Теперь понятнее, где оборвалась цепочка: «${answer}». Я учту это перед следующим предложением, вместо автоматической замены навыка.`, `${key}:reply`);
+          await message(profile, "assistant", `Сохранил, что помешало: «${answer}». Сначала учту это, и только потом предложу следующий шаг.`, `${key}:reply`);
         } else {
           await saveInterventionMemory({ userId: user.userId, skillId: pendingAnalysis.skill_id, loopId: pendingAnalysis.loop_id, outcome: "skill_rejected", rejectionReason: answer });
           await message(profile, "assistant", `Спасибо, причина понятна: «${answer}». Этот шаг не буду защищать или повторять без нового основания.`, `${key}:reply`);
@@ -314,7 +314,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           if (loop) await resolveOpenLoop(loop.id, "partial");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "partial" });
           await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "chain" });
-          await message(profile, "assistant", "Частично — это уже результат. На каком моменте получилось остановиться? Посмотрим, что произошло прямо перед этим, и найдём подходящую точку продолжения.", `${key}:reply`);
+          await message(profile, "assistant", "Частично — это тоже результат. До какого конкретно момента Вы дошли? Что было последним сделанным действием?", `${key}:reply`);
         } else if (body.result === "failed") {
           // PATCH 1.1: NOT_DONE → Missing Link Analysis без автозамены skill.
           await event(profile, body.sessionId, "outcome_not_done", loopId, { loop_id: loopId });
@@ -322,7 +322,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           if (loop) await resolveOpenLoop(loop.id, "not_done");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "not_done" });
           await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "missing_link" });
-          await message(profile, "assistant", `${trainers[profile.trainer_id].failure} Где именно прервалось действие: не получилось начать, что-то отвлекло или шаг оказался слишком большим? Сначала уточним это, затем выберем следующий шаг.`, `${key}:reply`);
+          await message(profile, "assistant", `${trainers[profile.trainer_id].failure} Что произошло перед остановкой: не получилось начать, что-то отвлекло или шаг оказался слишком большим? Можно ответить своими словами.`, `${key}:reply`);
         } else {
           // more → трактуем как done с превышением плана
           await event(profile, body.sessionId, "outcome_done", loopId, { loop_id: loopId });

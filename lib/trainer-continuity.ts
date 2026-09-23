@@ -153,8 +153,8 @@ function buildDay2CheckIn(
     result: plan.result,
     prompt:
       plan.result === "failed"
-        ? `Вчера по действию «${plan.skill_title}» ты отметил: ${outcomeLabel(plan.result)}${score}. Что помешало по факту?`
-        : `Вчера по действию «${plan.skill_title}» ты отметил: ${outcomeLabel(plan.result)}${score}. Что изменилось после этого шага по факту?`,
+        ? `Вчера по действию «${plan.skill_title}» Вы отметили: ${outcomeLabel(plan.result)}${score}. Что помешало по факту?`
+        : `Вчера по действию «${plan.skill_title}» Вы отметили: ${outcomeLabel(plan.result)}${score}. Что изменилось после этого шага по факту?`,
     actionLabel:
       plan.result === "failed" ? "Разобрать и изменить шаг" : "Ответить тренеру",
   };
@@ -313,7 +313,7 @@ function buildGapReturn(
     return {
       ...base,
       safetyBlocked: false,
-      prompt: `Ты вернулся после перерыва в ${pause}. Ничего не сброшено: для «${current.skill_title}» сохранено «${outcomeLabel(current.result)}», ${score}. Продолжим с текущей точки, без попытки догонять дни.`,
+      prompt: `Вы вернулись после перерыва в ${pause}. Ничего не сброшено: для «${current.skill_title}» сохранено «${outcomeLabel(current.result)}», ${score}. Продолжим с текущей точки, без попытки догонять дни.`,
       actionLabel: "Продолжить с текущей точки",
     };
   }

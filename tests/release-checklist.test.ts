@@ -91,3 +91,17 @@ test("client bundle never contains the OpenAI endpoint with a key reference", ()
     );
   }
 });
+
+test("conversation follow-up always offers a free-text alternative", () => {
+  const source = readFileSync(path.join(root, "app", "trainer-app.tsx"), "utf8");
+  assert.ok(source.includes(">Другой ответ</button>"));
+  assert.ok(source.includes("writeAnotherOutcome"));
+});
+
+test("safety and continuity copy use formal address", () => {
+  const safety = readFileSync(path.join(root, "lib", "trainers.ts"), "utf8");
+  const continuity = readFileSync(path.join(root, "lib", "trainer-continuity.ts"), "utf8");
+  assert.ok(safety.includes("свяжитесь с местной экстренной службой"));
+  assert.ok(continuity.includes("Вы отметили"));
+  assert.ok(continuity.includes("Вы вернулись после перерыва"));
+});
