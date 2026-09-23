@@ -451,7 +451,7 @@ try {
     writtenCount: 8,
     allRegisteredAndComplete: true,
     counterexampleRejected: true,
-    registrySize: 47,
+    registrySize: 51,
   });
 
   const aiFallback = await runEndpoint(baseUrl, "ai-fallback");
@@ -527,8 +527,52 @@ try {
     },
   });
 
+  const simpleAnalysis = await runEndpoint(baseUrl, "simple-analysis-cycle");
+  assert.deepEqual(simpleAnalysis, {
+    noPlanBeforeConfirmation: true,
+    stages: ["clarify", "confirm", "correct", "confirm"],
+    correctedHypothesis: true,
+    completed: true,
+    planCreated: true,
+    openLoopCreated: true,
+    fullPracticeSteps: 3,
+  });
+
+  const behaviorChain = await runEndpoint(baseUrl, "behavior-chain-cycle");
+  assert.deepEqual(behaviorChain, {
+    noPlanDuringChain: true,
+    stages: ["chain_trigger", "chain_thought", "chain_emotion_body", "chain_urge", "chain_action", "chain_consequences", "chain_confirm"],
+    correctionStage: "chain_edit_choose",
+    editStage: "edit_thought",
+    correctedLinkStored: true,
+    secondCorrectionStage: "chain_edit_choose",
+    secondEditStage: "edit_action",
+    secondCorrectedLinkStored: true,
+    summaryComplete: true,
+    choiceStage: "chain_choose",
+    completed: true,
+    planCreated: true,
+    openLoopCreated: true,
+    selectedSkill: "check-facts",
+    fullPracticeSteps: 3,
+    memoryStored: true,
+    memoryShownAsContextCard: true,
+    memoryCardDismissed: true,
+    memoryDraftStage: "chain_confirm",
+    memoryDraftRequiresConfirmation: true,
+  });
+
+  const interventionRouting = await runEndpoint(baseUrl, "intervention-routing");
+  assert.deepEqual(interventionRouting, {
+    thought: "check-facts",
+    body: "grounding-543",
+    urge: "urge-surfing",
+    action: "distract-delay",
+    highIntensity: "stop",
+  });
+
   console.log(
-    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution, export queue, Sheets mirror cycle with failure recovery, onboarding flow, outcome semantics, safety cycle, event completeness, AI fallback, full resize/replace/repeat/transfer adjustment cycle and E2E week Day 1-7.",
+    "D1 integration passed: recommendation branches, persistence, relationship cycle, simple and behavioral-chain analysis, full adjustment cycle and E2E week Day 1-7.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");

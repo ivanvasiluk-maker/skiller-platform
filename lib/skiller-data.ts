@@ -505,6 +505,7 @@ type RecommendationInput = {
   importantGoal: string;
   intensity: number;
   risk: string;
+  interventionPoint?: "thought" | "body" | "urge" | "action";
 };
 
 function selectSkill(input: RecommendationInput) {
@@ -512,6 +513,16 @@ function selectSkill(input: RecommendationInput) {
     return input.firstSignal === "body"
       ? { skillId: "grounding-543", changePoint: "телесное напряжение до анализа", reason: "Сначала нужно вернуть контакт с настоящим, а затем решать проблему." }
       : { skillId: "stop", changePoint: "между импульсом и действием", reason: "При высокой интенсивности важнее восстановить возможность выбирать действие." };
+  }
+  // Выбор пользователя уточняет точку работы, но не может обойти safety/stabilization.
+  if (input.interventionPoint === "thought") {
+    return { skillId: "check-facts", changePoint: "интерпретация ситуации", reason: "Вы выбрали работу с мыслью, поэтому проверяем интерпретацию до перехода к привычному действию." };
+  }
+  if (input.interventionPoint === "body") {
+    return { skillId: "grounding-543", changePoint: "телесное напряжение до действия", reason: "Вы выбрали работу с телом и эмоцией, поэтому сначала возвращаем опору и внимание к настоящему." };
+  }
+  if (input.interventionPoint === "urge") {
+    return { skillId: "urge-surfing", changePoint: "реакция на импульс", reason: "Вы выбрали момент импульса, поэтому тренируем паузу без подавления и автоматического действия." };
   }
   if (input.kind === "conflict") {
     return input.desiredDirection === "relationship"

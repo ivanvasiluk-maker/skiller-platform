@@ -8,6 +8,7 @@ import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-co
 import { produceFreeTalkReply } from "@/lib/free-talk";
 import { ensureOpenLoopStorage, createOpenLoop, dueOpenLoop, markFollowUpShown, markFollowUpAnswered, resolveOpenLoop, openLoopForPlan, buildConversationContext, buildOrchestratorInstructions, topicFromText, activeOpenLoops, saveSuccessFactor, saveInterventionMemory, createConversationFollowUp, pendingConversationFollowUp, completeConversationFollowUp, type OpenLoop, type ConversationFollowUp } from "@/lib/conversation-orchestrator";
 import { concreteActionFromText } from "@/lib/conversation-language";
+import { advanceComplexAnalysis, applyBehavioralMemoryDraft, behavioralPatternById, buildWorkingHypothesis, chainEditPrompt, chooseChainEditField, clarificationQuestion, completeSituationAnalysis, complexAnalysisQuestion, createSituationAnalysis, dismissBehavioralMemory, ensureConversationAnalysisStorage, interventionPointPrompt, isBareRejection, isHypothesisConfirmed, moveToInterventionChoice, parseChainEditField, parseInterventionPoint, pendingSituationAnalysis, relevantBehavioralPattern, requestSituationCorrection, saveBehavioralPattern, saveInterventionPoint, saveSituationHypothesis, type BehavioralPattern, type InterventionPoint, type SituationAnalysisSession } from "@/lib/conversation-analysis";
 import type { OutcomeReasonCode } from "@/lib/outcome-policy";
 import { recordPilotEvent, type PilotEventPayload } from "@/lib/pilot-events";
 import { skillCardVersion } from "@/lib/skill-card-versions";
@@ -17,7 +18,8 @@ import { trainers, PRODUCT_VERSION, dayIndex, requiresSafetyRoute, safetyMessage
 export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
 export type TrainerMessage = { id: string; role: "user" | "assistant"; text: string; trainer_id: TrainerId; created_at: string };
 export type TrainerPlan = { id: string; situation_id: string; skill_json: string; skill_title: string; entry_mode: string; intensity_before: number; intensity_after: number | null; attempt_id: string | null; result: "done" | "failed" | "more" | null; helpfulness: number | null; decision_reason_code: OutcomeReasonCode; decision_version: string; created_at: string };
-export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity; openLoops: OpenLoop[]; dueLoop: OpenLoop | null; pendingFollowUp: ConversationFollowUp | null };
+export type ContextualMemory = Pick<BehavioralPattern, "id" | "thought" | "urge" | "action" | "intervention_point" | "occurrence_count">;
+export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity; openLoops: OpenLoop[]; dueLoop: OpenLoop | null; pendingFollowUp: ConversationFollowUp | null; pendingSituationAnalysis: SituationAnalysisSession | null; contextualMemory: ContextualMemory | null };
 
 const statements = [
   "CREATE TABLE IF NOT EXISTS trainer_profiles (user_id TEXT PRIMARY KEY, pseudonym TEXT NOT NULL UNIQUE, name TEXT NOT NULL, trainer_id TEXT NOT NULL, interaction_mode TEXT NOT NULL DEFAULT 'explore', main_problem TEXT NOT NULL, consent_version TEXT NOT NULL, created_at TEXT NOT NULL, last_interaction_at TEXT NOT NULL, safety_flag INTEGER NOT NULL DEFAULT 0)",
@@ -55,19 +57,26 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
   await ensureUser(user);
   await ensureTrainerStorage();
   await ensureOpenLoopStorage();
+  await ensureConversationAnalysisStorage();
   const db = getRawDb();
   const profile = await profileFor(user.userId);
-  if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [], continuity: buildTrainerContinuity([]), openLoops: [], dueLoop: null, pendingFollowUp: null };
-  const [messages, plans, days, loops, due, pendingFollowUp] = await Promise.all([
+  if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [], continuity: buildTrainerContinuity([]), openLoops: [], dueLoop: null, pendingFollowUp: null, pendingSituationAnalysis: null, contextualMemory: null };
+  const [messages, plans, days, loops, due, pendingFollowUp, pendingPreAnalysis] = await Promise.all([
     db.prepare("SELECT * FROM (SELECT id,role,text,trainer_id,created_at FROM trainer_messages WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 60) ORDER BY created_at,id").bind(user.userId).all<TrainerMessage>(),
     db.prepare("SELECT * FROM trainer_plans WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100").bind(user.userId).all<TrainerPlan>(),
     db.prepare("SELECT DISTINCT day_index FROM pilot_events WHERE user_id=? AND event_name='engaged_return' ORDER BY day_index").bind(profile.pseudonym).all<{ day_index: number }>(),
     activeOpenLoops(user.userId),
     dueOpenLoop(user.userId),
     pendingConversationFollowUp(user.userId),
+    pendingSituationAnalysis(user.userId),
   ]);
   const day = dayIndex(profile.created_at);
   const engagedDays = days.results.map((entry) => entry.day_index);
+  const memoryCanBeShown = pendingPreAnalysis?.analysis_depth === "complex" && !pendingPreAnalysis.memory_dismissed
+    && pendingPreAnalysis.stage === "chain_trigger";
+  const contextualMemory = memoryCanBeShown
+    ? await behavioralPatternById(user.userId, pendingPreAnalysis.memory_pattern_id)
+    : null;
   return {
     profile,
     day,
@@ -84,6 +93,8 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
     openLoops: loops,
     dueLoop: due,
     pendingFollowUp,
+    pendingSituationAnalysis: pendingPreAnalysis,
+    contextualMemory,
   };
 }
 async function event(
@@ -117,14 +128,62 @@ async function message(profile: TrainerProfile, role: "user" | "assistant", text
   await getRawDb().prepare("INSERT OR IGNORE INTO trainer_messages (id,user_id,role,text,trainer_id,created_at) VALUES (?,?,?,?,?,?)").bind(id, profile.user_id, role, text, profile.trainer_id, new Date().toISOString()).run();
 }
 
+async function createRecommendedPlan(input: {
+  user: ChatGPTUser;
+  profile: TrainerProfile;
+  sessionId: string;
+  key: string;
+  text: string;
+  mode: "practice" | "stuck" | "distress";
+  kind: "stuck" | "emotion" | "conflict" | "other";
+  signal: "thought" | "body" | "emotion" | "urge";
+  urge: "avoid" | "distract" | "attack" | "withdraw";
+  intensity: number;
+  interventionPoint?: InterventionPoint;
+}) {
+  const recommendation = await recommendSkill(input.user, {
+    kind: input.kind,
+    description: input.text,
+    firstSignal: input.signal,
+    actionUrge: input.urge,
+    desiredDirection: input.mode === "distress" ? "stabilize" : "goal",
+    importantGoal: input.profile.main_problem,
+    intensity: input.intensity,
+    risk: "no",
+    interventionPoint: input.interventionPoint,
+  });
+  if (!recommendation.skill) return;
+  const skill = recommendation.skill;
+  const concreteAction = input.mode === "distress" ? null : concreteActionFromText(input.text);
+  const plannedAction = concreteAction ?? skill.title;
+  await getRawDb().prepare("INSERT INTO trainer_plans (id,user_id,situation_id,skill_json,skill_title,entry_mode,intensity_before,decision_reason_code,decision_version,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    .bind(input.key, input.user.userId, recommendation.situationId, JSON.stringify(skill), skill.title, input.mode, input.intensity, recommendation.reasonCode ?? "first_try", recommendation.decisionVersion ?? "outcome-policy-v2", new Date().toISOString()).run();
+  const reply = concreteAction
+    ? `Гипотезу зафиксировали. Теперь проверим её действием. Первый шаг: «${concreteAction}». Ниже — точная практика; после попытки напишите, что получилось.`
+    : `Гипотезу зафиксировали. Проверим её практикой «${skill.title}». Полная последовательность шагов — ниже.`;
+  await message(input.profile, "assistant", reply, `${input.key}:reply`);
+  await event(input.profile, input.sessionId, "skill_recommended", input.key, { skill_id: skill.id, decision_reason_code: recommendation.reasonCode ?? "first_try", decision_version: recommendation.decisionVersion ?? "outcome-policy-v2" });
+  if (recommendation.analysis) await event(input.profile, input.sessionId, "mechanism_generated", input.key);
+  const loop = await createOpenLoop({
+    userId: input.user.userId,
+    planId: input.key,
+    topic: topicFromText(input.text),
+    plannedAction,
+    entryMode: input.mode,
+    expectedHours: 24,
+  });
+  await event(input.profile, input.sessionId, "open_loop_created", loop.id, { loop_id: loop.id, entry_mode: input.mode });
+}
+
 const bodySchema = z.object({
-  action: z.enum(["onboard", "settings", "open", "message", "situation", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain"]),
+  action: z.enum(["onboard", "settings", "open", "message", "situation", "confirmMemory", "dismissMemory", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain"]),
   requestId: z.string().uuid(), sessionId: z.string().uuid(),
   name: z.string().trim().min(1).max(60).optional(), trainerId: z.enum(["marsha", "beck", "skinny"]).optional(),
   interactionMode: z.enum(["support", "explore", "direct"]).optional(), text: z.string().trim().max(1200).optional(), consent: z.boolean().optional(),
   mode: z.enum(["practice", "stuck", "distress", "talk"]).optional(), kind: z.enum(["stuck", "emotion", "conflict", "other"]).optional(),
   risk: z.enum(["no", "yes", "unknown"]).optional(), intensity: z.number().int().min(0).max(10).optional(),
   signal: z.enum(["thought", "body", "emotion", "urge"]).optional(), urge: z.enum(["avoid", "distract", "attack", "withdraw"]).optional(),
+  analysisDepth: z.enum(["simple", "complex", "direct"]).optional(),
   planId: z.string().uuid().optional(), result: z.enum(["done", "failed", "more", "partial"]).optional(),
   helpfulness: z.number().int().min(0).max(10).optional(), understood: z.number().int().min(0).max(10).optional(), continueIntent: z.number().int().min(0).max(10).optional(),
   helped: z.string().max(800).optional(), annoyed: z.string().max(800).optional(), recapDay: z.union([z.literal(3), z.literal(7)]).optional(),
@@ -172,12 +231,28 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
       await db.prepare("UPDATE trainer_profiles SET safety_flag=0 WHERE user_id=?").bind(user.userId).run();
       await event(profile, body.sessionId, "safety_check_completed", key);
     }
+    if (body.action === "dismissMemory") {
+      const analysis = await pendingSituationAnalysis(user.userId);
+      if (analysis?.memory_pattern_id) {
+        await dismissBehavioralMemory(user.userId, analysis.id);
+        await event(profile, body.sessionId, "behavioral_memory_dismissed", analysis.id);
+      }
+    }
+    if (body.action === "confirmMemory") {
+      const analysis = await pendingSituationAnalysis(user.userId);
+      const pattern = analysis ? await behavioralPatternById(user.userId, analysis.memory_pattern_id) : null;
+      if (!analysis || !pattern || analysis.memory_dismissed) throw new Error("Подходящее воспоминание для этого разбора не найдено.");
+      const reply = await applyBehavioralMemoryDraft(analysis, pattern);
+      await message(profile, "assistant", reply, `${key}:reply`);
+      await event(profile, body.sessionId, "behavioral_memory_confirmed", analysis.id);
+    }
     if (body.action === "message" || body.action === "situation") {
       if (!body.text || body.text.length < 3) throw new Error("Расскажите чуть подробнее.");
       await message(profile, "user", body.text, `${key}:user`);
       await event(profile, body.sessionId, "message_sent", key);
       await engage(profile, body.sessionId);
       const pendingAnalysis = await pendingConversationFollowUp(user.userId);
+      const pendingPreAnalysis = await pendingSituationAnalysis(user.userId);
       // PATCH 1.1: при входе приоритет отдаём due open loop — продолжение вчерашнего разговора.
       const due = await dueOpenLoop(user.userId);
       if (due) {
@@ -213,6 +288,73 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           await message(profile, "assistant", `Спасибо, причина понятна: «${answer}». Этот шаг не буду защищать или повторять без нового основания.`, `${key}:reply`);
         }
         await completeConversationFollowUp(pendingAnalysis.id, answer);
+      } else if (pendingPreAnalysis) {
+        const answer = body.text.trim();
+        const isConfirmationStage = pendingPreAnalysis.stage === "confirm" || pendingPreAnalysis.stage === "chain_confirm";
+        if (pendingPreAnalysis.stage === "chain_choose") {
+          const interventionPoint = parseInterventionPoint(answer);
+          if (!interventionPoint) {
+            await message(profile, "assistant", `Не смог однозначно определить точку. ${interventionPointPrompt}`, `${key}:reply`);
+          } else {
+            const signal = await saveInterventionPoint(pendingPreAnalysis, interventionPoint);
+            await saveBehavioralPattern(pendingPreAnalysis, interventionPoint);
+            await completeSituationAnalysis(pendingPreAnalysis.id);
+            await event(profile, body.sessionId, "analysis_intervention_selected", pendingPreAnalysis.id, { intervention_point: interventionPoint });
+            await createRecommendedPlan({
+              user,
+              profile,
+              sessionId: body.sessionId,
+              key,
+              text: pendingPreAnalysis.original_text,
+              mode: pendingPreAnalysis.mode,
+              kind: pendingPreAnalysis.kind,
+              signal,
+              urge: pendingPreAnalysis.urge,
+              intensity: pendingPreAnalysis.intensity,
+              interventionPoint,
+            });
+          }
+        } else if (isConfirmationStage && isHypothesisConfirmed(answer) && pendingPreAnalysis.analysis_depth === "complex") {
+          await moveToInterventionChoice(pendingPreAnalysis.id);
+          await event(profile, body.sessionId, "analysis_hypothesis_confirmed", pendingPreAnalysis.id);
+          await message(profile, "assistant", interventionPointPrompt, `${key}:reply`);
+        } else if (pendingPreAnalysis.stage === "chain_edit_choose") {
+          const editField = parseChainEditField(answer);
+          const reply = editField
+            ? await chooseChainEditField(pendingPreAnalysis, editField)
+            : `Не смог однозначно определить звено. ${chainEditPrompt}`;
+          await message(profile, "assistant", reply, `${key}:reply`);
+        } else if (isConfirmationStage && isHypothesisConfirmed(answer)) {
+          await completeSituationAnalysis(pendingPreAnalysis.id);
+          await event(profile, body.sessionId, "analysis_hypothesis_confirmed", pendingPreAnalysis.id);
+          await createRecommendedPlan({
+            user,
+            profile,
+            sessionId: body.sessionId,
+            key,
+            text: pendingPreAnalysis.original_text,
+            mode: pendingPreAnalysis.mode,
+            kind: pendingPreAnalysis.kind,
+            signal: pendingPreAnalysis.signal,
+            urge: pendingPreAnalysis.urge,
+            intensity: pendingPreAnalysis.intensity,
+          });
+        } else if (isConfirmationStage && isBareRejection(answer)) {
+          await requestSituationCorrection(pendingPreAnalysis);
+          await message(profile, "assistant", pendingPreAnalysis.analysis_depth === "complex" ? `Хорошо. Можно исправлять звенья по одному, пока цепочка не станет точной. ${chainEditPrompt}` : "Хорошо, не буду считать гипотезу верной. Что именно в ней не совпадает с Вашим опытом?", `${key}:reply`);
+        } else if (pendingPreAnalysis.analysis_depth === "complex") {
+          const sessionForStep = isConfirmationStage ? { ...pendingPreAnalysis, stage: "chain_correct" as const } : pendingPreAnalysis;
+          const reply = await advanceComplexAnalysis(sessionForStep, answer);
+          if (sessionForStep.stage === "chain_consequences" || sessionForStep.stage === "chain_correct") {
+            await event(profile, body.sessionId, "analysis_hypothesis_shown", pendingPreAnalysis.id);
+          }
+          await message(profile, "assistant", reply, `${key}:reply`);
+        } else {
+          const hypothesis = buildWorkingHypothesis(pendingPreAnalysis, answer);
+          await saveSituationHypothesis(pendingPreAnalysis.id, answer, hypothesis);
+          await event(profile, body.sessionId, "analysis_hypothesis_shown", pendingPreAnalysis.id);
+          await message(profile, "assistant", hypothesis, `${key}:reply`);
+        }
       } else if (body.action === "message") {
         await event(profile, body.sessionId, "free_talk_started", body.sessionId);
         await event(profile, body.sessionId, "chat_started", body.sessionId);
@@ -226,37 +368,40 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           : await freeTalk(profile, state.messages.slice(-8), buildOrchestratorInstructions(ctx));
         await message(profile, "assistant", replyText, `${key}:reply`);
       } else {
-        const mode = body.mode ?? "stuck";
+        const mode = body.mode === "practice" || body.mode === "distress" ? body.mode : "stuck";
         if (mode === "distress") await event(profile, body.sessionId, "distress_flow_started", key);
-        const recommendation = await recommendSkill(user, {
-          kind: body.kind ?? (mode === "distress" ? "emotion" : "stuck"), description: body.text,
-          firstSignal: body.signal ?? "thought", actionUrge: body.urge ?? "avoid",
-          desiredDirection: mode === "distress" ? "stabilize" : "goal", importantGoal: profile.main_problem,
-          intensity: body.intensity ?? 5, risk: "no",
-        });
         await event(profile, body.sessionId, "situation_submitted", key);
-        if (recommendation.skill) {
-          const skill = recommendation.skill;
-          const concreteAction = mode === "distress" ? null : concreteActionFromText(body.text);
-          const plannedAction = concreteAction ?? skill.title;
-          await db.prepare("INSERT INTO trainer_plans (id,user_id,situation_id,skill_json,skill_title,entry_mode,intensity_before,decision_reason_code,decision_version,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
-            .bind(key, user.userId, recommendation.situationId, JSON.stringify(skill), skill.title, mode, body.intensity ?? 5, recommendation.reasonCode ?? "first_try", recommendation.decisionVersion ?? "outcome-policy-v2", new Date().toISOString()).run();
-          const reply = concreteAction
-            ? `Давайте не будем решать всю задачу сразу. Первый шаг: «${concreteAction}». Напишите мне, когда попробуете.`
-            : `${trainers[profile.trainer_id].greeting} Попробуем «${skill.title}».`;
-          await message(profile, "assistant", reply, `${key}:reply`);
-          await event(profile, body.sessionId, "skill_recommended", key, { skill_id: skill.id, decision_reason_code: recommendation.reasonCode ?? "first_try", decision_version: recommendation.decisionVersion ?? "outcome-policy-v2" });
-          if (recommendation.analysis) await event(profile, body.sessionId, "mechanism_generated", key);
-          // PATCH 1.1: сохраняем договорённость как open loop.
-          const loop = await createOpenLoop({
-            userId: user.userId,
-            planId: key,
-            topic: topicFromText(body.text),
-            plannedAction,
-            entryMode: mode,
-            expectedHours: 24,
+        const situationInput = {
+          user,
+          profile,
+          sessionId: body.sessionId,
+          key,
+          text: body.text,
+          mode,
+          kind: body.kind ?? (mode === "distress" ? "emotion" : "stuck"),
+          signal: body.signal ?? "thought",
+          urge: body.urge ?? "avoid",
+          intensity: body.intensity ?? 5,
+        } as const;
+        if (body.analysisDepth === "simple" || body.analysisDepth === "complex") {
+          const rememberedPattern = await relevantBehavioralPattern(user.userId, situationInput.kind, situationInput.urge);
+          const analysis = await createSituationAnalysis({
+            user_id: user.userId,
+            analysis_depth: body.analysisDepth === "complex" ? "complex" : "simple",
+            original_text: situationInput.text,
+            kind: situationInput.kind,
+            mode: situationInput.mode,
+            signal: situationInput.signal,
+            urge: situationInput.urge,
+            intensity: situationInput.intensity,
+            risk: "no",
+            memoryPatternId: rememberedPattern?.id,
           });
-          await event(profile, body.sessionId, "open_loop_created", loop.id, { loop_id: loop.id, entry_mode: mode });
+          await event(profile, body.sessionId, "analysis_started", analysis.id);
+          const firstQuestion = analysis.analysis_depth === "complex" ? complexAnalysisQuestion(analysis.stage) : clarificationQuestion(analysis.kind);
+          await message(profile, "assistant", firstQuestion, `${key}:reply`);
+        } else {
+          await createRecommendedPlan(situationInput);
         }
       }
     }

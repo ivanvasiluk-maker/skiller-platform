@@ -9,6 +9,7 @@ import { trainers, dayIndex, type TrainerId, type InteractionMode } from "./trai
 import { buildTrainerContinuity, type TrainerContinuity, type ContinuityPlan } from "./trainer-continuity.ts";
 import { buildFreeTalkInstructions, getCharacterBible } from "./character-bible.ts";
 import type { OutcomeReasonCode } from "./outcome-policy.ts";
+import { recentBehavioralPatterns } from "./conversation-analysis.ts";
 
 export type OpenLoopStatus = "active" | "answered" | "resolved" | "expired";
 
@@ -370,7 +371,7 @@ export type ConversationContext = {
   recentConversation: { role: "user" | "assistant"; text: string }[];
   activeOpenLoops: Pick<OpenLoop, "id" | "topic" | "planned_action" | "follow_up_due" | "priority">[];
   currentGoals: string[];
-  behavioralMemory: { lastOutcome: TrainerContinuity["lastOutcome"]; engagedDays: number[] };
+  behavioralMemory: { lastOutcome: TrainerContinuity["lastOutcome"]; engagedDays: number[]; patterns: { kind: string; urge: string; interventionPoint: string; occurrences: number }[] };
   interventionMemory: { resizeOrReplace: { kind: string; skillTitle: string; reasonCode: OutcomeReasonCode }[] };
   relevantSuccessFactors: string[];
   currentSituation: { mode: string; kind?: string; intensity?: number } | null;
@@ -396,6 +397,7 @@ export async function buildConversationContext(input: {
   skillEngineResult?: { skillId: string; reasonCode: string; decisionVersion: string } | null;
 }): Promise<ConversationContext> {
   const loops = input.profile ? await activeOpenLoops(input.userId) : [];
+  const behavioralPatterns = input.profile ? await recentBehavioralPatterns(input.userId) : [];
   const continuity: TrainerContinuity = buildTrainerContinuity(input.plans, {
     day: input.profile ? dayIndex(input.profile.created_at) : 1,
     startedAt: input.profile?.created_at,
@@ -432,7 +434,16 @@ export async function buildConversationContext(input: {
       priority: l.priority,
     })),
     currentGoals: input.profile ? [input.profile.main_problem] : [],
-    behavioralMemory: { lastOutcome: continuity.lastOutcome, engagedDays: input.engagedDays },
+    behavioralMemory: {
+      lastOutcome: continuity.lastOutcome,
+      engagedDays: input.engagedDays,
+      patterns: behavioralPatterns.map((pattern) => ({
+        kind: pattern.kind,
+        urge: pattern.action_urge,
+        interventionPoint: pattern.intervention_point,
+        occurrences: Number(pattern.occurrence_count),
+      })),
+    },
     interventionMemory: { resizeOrReplace },
     relevantSuccessFactors: [],
     currentSituation: input.situation ?? null,
@@ -460,6 +471,11 @@ export function renderConversationContext(ctx: ConversationContext): string {
   if (ctx.behavioralMemory.lastOutcome) {
     lines.push(
       `BEHAVIORAL MEMORY: последний результат ${ctx.behavioralMemory.lastOutcome.result} (польза ${ctx.behavioralMemory.lastOutcome.helpfulness ?? "—"}/10).`,
+    );
+  }
+  if (ctx.behavioralMemory.patterns.length) {
+    lines.push(
+      `BEHAVIORAL PATTERNS: ${ctx.behavioralMemory.patterns.map((p) => `${p.kind}/${p.urge} → ${p.interventionPoint}, подтверждений: ${p.occurrences}`).join("; ")}. Это наблюдения, не диагнозы; перед использованием проверь их с пользователем.`,
     );
   }
   if (ctx.interventionMemory.resizeOrReplace.length) {

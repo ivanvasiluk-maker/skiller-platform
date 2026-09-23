@@ -8,7 +8,7 @@ import {
 } from "../lib/request-idempotency";
 import { persistTrainerSettings } from "../lib/trainer-settings";
 import { dayIndex } from "../lib/trainers";
-import { completeAttempt } from "../lib/skiller-data";
+import { completeAttempt, recommendSkill } from "../lib/skiller-data";
 import {
   preparePilotEvent,
   recordPilotEvent,
@@ -1182,6 +1182,162 @@ async function runRelationshipCycle(db: D1Database) {
   };
 }
 
+/** Conversation-first: вопрос → гипотеза → исправление → подтверждение → практика. */
+async function runSimpleAnalysisCycle() {
+  const suffix = crypto.randomUUID();
+  const user = {
+    userId: `analysis-${suffix}`,
+    displayName: "Analysis Cycle",
+    email: `analysis-${suffix}@example.invalid`,
+    fullName: null,
+  };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+
+  await command({ action: "onboard", name: "Ирина", trainerId: "beck", text: "Откладываю важные задачи", consent: true });
+  const asked = await command({
+    action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck",
+    signal: "thought", urge: "avoid", intensity: 6, risk: "no",
+    text: "Нужно открыть отчёт и написать первый заголовок, но я откладываю",
+  });
+  const hypothesized = await command({ action: "message", mode: "stuck", text: "Я думаю, что отчёт получится плохим" });
+  const rejected = await command({ action: "message", mode: "stuck", text: "Нет" });
+  const corrected = await command({ action: "message", mode: "stuck", text: "Я боюсь не уложиться в срок и поэтому замираю" });
+  const completed = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
+
+  return {
+    noPlanBeforeConfirmation: asked.plans.length === 0 && hypothesized.plans.length === 0,
+    stages: [
+      asked.pendingSituationAnalysis?.stage ?? null,
+      hypothesized.pendingSituationAnalysis?.stage ?? null,
+      rejected.pendingSituationAnalysis?.stage ?? null,
+      corrected.pendingSituationAnalysis?.stage ?? null,
+    ],
+    correctedHypothesis: corrected.pendingSituationAnalysis?.hypothesis.includes("не уложиться в срок") ?? false,
+    completed: completed.pendingSituationAnalysis === null,
+    planCreated: completed.plans.length === 1,
+    openLoopCreated: completed.openLoops.length === 1,
+    fullPracticeSteps: completed.plans[0] ? (JSON.parse(completed.plans[0].skill_json) as { steps: unknown[] }).steps.length : 0,
+  };
+}
+
+/** Подробная поведенческая цепочка → подтверждение → Skill Engine → практика. */
+async function runBehaviorChainCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const user = {
+    userId: `behavior-chain-${suffix}`,
+    displayName: "Behavior Chain",
+    email: `behavior-chain-${suffix}@example.invalid`,
+    fullName: null,
+  };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+
+  await command({ action: "onboard", name: "Анна", trainerId: "marsha", text: "Хочу меньше избегать рабочих задач", consent: true });
+  const started = await command({
+    action: "situation", analysisDepth: "complex", mode: "stuck", kind: "stuck",
+    signal: "thought", urge: "distract", intensity: 7, risk: "no",
+    text: "Нужно закончить отчёт, но я ухожу в новости",
+  });
+  const stages: Array<string | null> = [started.pendingSituationAnalysis?.stage ?? null];
+  for (const answer of [
+    "Я открыла почту и увидела напоминание о сроке",
+    "Я подумала, что уже слишком поздно и я не успею",
+    "Появились тревога и тяжесть в груди",
+    "Захотелось закрыть документ и отвлечься",
+    "Я открыла новости вместо отчёта",
+  ]) {
+    const state = await command({ action: "message", mode: "stuck", text: answer });
+    stages.push(state.pendingSituationAnalysis?.stage ?? null);
+  }
+  const summarized = await command({
+    action: "message", mode: "stuck",
+    text: "Сразу стало легче, а вечером тревога усилилась и отчёт остался",
+  });
+  stages.push(summarized.pendingSituationAnalysis?.stage ?? null);
+  const rejected = await command({ action: "message", mode: "stuck", text: "Нет" });
+  const editSelected = await command({ action: "message", mode: "stuck", text: "Мысль или смысл" });
+  await command({
+    action: "message", mode: "stuck",
+    text: "Первым сигналом было не письмо, а мысль, что работа должна быть идеальной",
+  });
+  const secondRejected = await command({ action: "message", mode: "stuck", text: "Нет" });
+  const secondEditSelected = await command({ action: "message", mode: "stuck", text: "Действие" });
+  const secondCorrected = await command({
+    action: "message", mode: "stuck",
+    text: "Я не открыла новости, а стала бесконечно править план отчёта",
+  });
+  const choice = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
+  const completed = await command({ action: "message", mode: "stuck", text: "Мысль и интерпретация" });
+  const remembered = await command({
+    action: "situation", analysisDepth: "complex", mode: "stuck", kind: "stuck",
+    signal: "thought", urge: "distract", intensity: 5, risk: "no",
+    text: "Снова откладываю подготовку документа и читаю новости",
+  });
+  const dismissed = await command({ action: "dismissMemory" });
+  const currentAnalysisId = remembered.pendingSituationAnalysis?.id ?? "";
+  await db.prepare("UPDATE conversation_analysis_sessions SET memory_dismissed=0 WHERE id=?").bind(currentAnalysisId).run();
+  const memoryConfirmed = await command({ action: "confirmMemory" });
+  const memoryRows = await db.prepare(
+    "SELECT thought,urge,action,intervention_point FROM behavioral_memory WHERE user_id=?",
+  ).bind(user.userId).all<{ thought: string; urge: string; action: string; intervention_point: string }>();
+  const chain = secondCorrected.pendingSituationAnalysis
+    ? JSON.parse(secondCorrected.pendingSituationAnalysis.chain_json) as Record<string, string>
+    : {};
+
+  return {
+    noPlanDuringChain: summarized.plans.length === 0,
+    stages,
+    correctionStage: rejected.pendingSituationAnalysis?.stage ?? null,
+    editStage: editSelected.pendingSituationAnalysis?.stage ?? null,
+    correctedLinkStored: chain.thought?.includes("идеальной") ?? false,
+    secondCorrectionStage: secondRejected.pendingSituationAnalysis?.stage ?? null,
+    secondEditStage: secondEditSelected.pendingSituationAnalysis?.stage ?? null,
+    secondCorrectedLinkStored: chain.action?.includes("править план") ?? false,
+    summaryComplete: ["Событие:", "Мысль или смысл:", "Эмоции и тело:", "Импульс:", "Действие:", "Последствия:", "Точка для вмешательства"].every((part) => secondCorrected.pendingSituationAnalysis?.hypothesis.includes(part)),
+    choiceStage: choice.pendingSituationAnalysis?.stage ?? null,
+    completed: completed.pendingSituationAnalysis === null,
+    planCreated: completed.plans.length === 1,
+    openLoopCreated: completed.openLoops.length === 1,
+    selectedSkill: completed.plans[0] ? (JSON.parse(completed.plans[0].skill_json) as { id: string }).id : null,
+    fullPracticeSteps: completed.plans[0] ? (JSON.parse(completed.plans[0].skill_json) as { steps: unknown[] }).steps.length : 0,
+    memoryStored: memoryRows.results.length === 1 && memoryRows.results[0]?.intervention_point === "thought",
+    memoryShownAsContextCard: remembered.contextualMemory?.thought.includes("идеальной") ?? false,
+    memoryCardDismissed: dismissed.contextualMemory === null,
+    memoryDraftStage: memoryConfirmed.pendingSituationAnalysis?.stage ?? null,
+    memoryDraftRequiresConfirmation: memoryConfirmed.messages.at(-1)?.text.includes("как черновик") ?? false,
+  };
+}
+
+async function runInterventionRouting() {
+  const points = ["thought", "body", "urge", "action"] as const;
+  const routed: Record<string, string | null> = {};
+  for (const point of points) {
+    const suffix = crypto.randomUUID();
+    const user = { userId: `point-${point}-${suffix}`, displayName: point, email: `${point}-${suffix}@example.invalid`, fullName: null };
+    const result = await recommendSkill(user, {
+      kind: "stuck",
+      description: "Откладываю отчёт и переключаюсь на новости",
+      firstSignal: "thought",
+      actionUrge: "distract",
+      desiredDirection: "goal",
+      importantGoal: "Закончить отчёт",
+      intensity: 6,
+      risk: "no",
+      interventionPoint: point,
+    });
+    routed[point] = result.skill?.id ?? null;
+  }
+  const safetyUser = { userId: `point-safety-${crypto.randomUUID()}`, displayName: "Safety", email: `safety-${crypto.randomUUID()}@example.invalid`, fullName: null };
+  const highIntensity = await recommendSkill(safetyUser, {
+    kind: "stuck", description: "Очень сильное напряжение", firstSignal: "thought", actionUrge: "avoid",
+    desiredDirection: "goal", importantGoal: "Вернуть контроль", intensity: 9, risk: "no", interventionPoint: "thought",
+  });
+  return { ...routed, highIntensity: highIntensity.skill?.id ?? null };
+}
+
 async function runPilotAnalytics(db: D1Database) {
   const suffix = crypto.randomUUID();
   const userId = `analytics-user-${suffix}`;
@@ -1309,6 +1465,15 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/relationship-cycle") {
       return Response.json(await runRelationshipCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/simple-analysis-cycle") {
+      return Response.json(await runSimpleAnalysisCycle());
+    }
+    if (request.method === "POST" && url.pathname === "/behavior-chain-cycle") {
+      return Response.json(await runBehaviorChainCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/intervention-routing") {
+      return Response.json(await runInterventionRouting());
     }
     if (request.method === "POST" && url.pathname === "/outcome-idempotency") {
       return Response.json(await runOutcomeIdempotency(env.DB));
