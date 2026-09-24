@@ -91,6 +91,31 @@ test("reply guard enforces free talk limits: 2–4 sentences, one question, acti
   assert.ok(validateTrainerReply("Понимаю, это сейчас тяжело. Давай выберем один маленький шаг — что из этого по силам?").ok);
 });
 
+
+test("conversation-first instructions prevent the hypothesis loop and fake outcomes", () => {
+  const beck = getCharacterBible("beck");
+  const instructions = buildFreeTalkInstructions(beck, "Давай спокойно разберём");
+
+  assert.match(instructions, /прямой запрос.*что делать сейчас/i);
+  assert.match(instructions, /дай один конкретный выполнимый шаг/i);
+  assert.match(instructions, /Не требуй сначала подтвердить рабочую гипотезу/i);
+  assert.match(instructions, /запрещено говорить.*есть результат/i);
+  assert.match(instructions, /Не копируй длинное сообщение пользователя/i);
+  assert.match(instructions, /гипотеза опциональна/i);
+
+  assert.match(beck.structure, /сначала ответить на явный запрос пользователя/i);
+  assert.ok(
+    beck.allowedMoves.some((move) =>
+      /без обязательного вопроса на подтверждение гипотезы/i.test(move),
+    ),
+  );
+  assert.ok(
+    beck.allowedMoves.some((move) =>
+      /не обсуждать её результат до явного сообщения пользователя/i.test(move),
+    ),
+  );
+});
+
 test("adversarial inputs: safety routing and injections are trainer-independent", () => {
   for (const id of TRAINER_IDS) {
     const bible = getCharacterBible(id);
