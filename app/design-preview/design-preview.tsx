@@ -222,8 +222,8 @@ function ReturnScreen({ coachId, go }: { coachId: CoachId; go: (id: ScreenId) =>
   return <div className="dp-screen dp-return">
     <div className="dp-brand compact">skiller<span>●</span></div>
     <Character coachId={coachId} size="large" mood="talk"/>
-    <p className="dp-eyebrow">ПРОДОЛЖАЕМ, А НЕ НАЧИНАЕМ ЗАНОВО</p><h1>Иван, доброе утро.</h1><p className="dp-lead">Вчера Вы хотели открыть отчёт и написать первый заголовок. Получилось?</p>
-    <div className="dp-return-actions"><button onClick={() => go("result")}>Да, получилось <Check/></button><button onClick={() => go("analysis")}>Только частично <Pause/></button><button onClick={() => go("analysis")}>Нет, не сделал <CircleHelp/></button><button>Хочу ответить иначе <MessageCircle/></button></div>
+    <p className="dp-eyebrow">ПРОДОЛЖАЕМ, А НЕ НАЧИНАЕМ ЗАНОВО</p><h1>Иван, мы потерялись на пару дней.</h1><p className="dp-lead">Всё нормально — ничего догонять не нужно. Последний раз мы разбирали начало отчёта. Это ещё актуально?</p>
+    <div className="dp-return-actions"><button onClick={() => go("result")}>Да, продолжим с отчётом <Check/></button><button onClick={() => go("chat")}>Появилось что-то важнее <MessageCircle/></button><button onClick={() => go("home")}>Начнём просто с сегодня <Sparkles/></button><button>Хочу ответить иначе <MoreHorizontal/></button></div>
     <button className="dp-text-button" onClick={() => go("home")}>Сейчас не хочу отвечать</button>
   </div>;
 }
@@ -232,7 +232,7 @@ function JournalScreen({ coachId, go }: { coachId: CoachId; go: (id: ScreenId) =
   return <div className="dp-screen dp-scroll dp-with-nav">
     <PhoneHeader coachId={coachId} title="Дневник" subtitle="около 40 секунд"/>
     <section className="dp-journal-head"><p className="dp-eyebrow">ПЯТНИЦА · 25 СЕНТЯБРЯ</p><h1>Как прошёл день?</h1><p>Не анализируем всё. Отметьте первое ощущение.</p></section>
-    {[['Настроение',6,'спокойнее'],['Энергия',4,'мало сил'],['Отвлекаемость',8,'часто']].map(([label,value,note])=><label className="dp-metric" key={label as string}><span><strong>{label}</strong><b>{value}/10</b></span><input type="range" min="0" max="10" defaultValue={value as number}/><small>{note}</small></label>)}
+    {[['Настроение',6,'спокойнее'],['Интерес к жизни',5,'обычный'],['Энергия',4,'мало сил'],['Отвлекаемость',8,'часто']].map(([label,value,note])=><label className="dp-metric" key={label as string}><span><strong>{label}</strong><b>{value}/10</b></span><input type="range" min="0" max="10" defaultValue={value as number}/><small>{note}</small></label>)}
     <label className="dp-thought"><span>Мысль дня <small>необязательно</small></span><textarea placeholder="Что хочется запомнить?"/></label>
     <button className="dp-primary">Сохранить день <Check size={18}/></button>
     <section className="dp-insight"><Sparkles/><div><small>НАБЛЮДЕНИЕ ЗА 4 ДНЯ</small><p>Когда энергия ниже 5, начать рабочую задачу было сложнее. В такие дни можно сразу выбирать самый короткий шаг.</p></div></section>
@@ -247,6 +247,7 @@ function ProfileScreen({ coachId, go }: { coachId: CoachId; go: (id: ScreenId) =
     <h2>Напоминания</h2>
     <div className="dp-settings-list"><label><span><Bell/><b>Вернуться к договорённости</b><small>Завтра в 09:30</small></span><input type="checkbox" defaultChecked/></label><label><span><BookOpen/><b>Заполнить дневник</b><small>Каждый день в 20:00</small></span><input type="checkbox" defaultChecked/></label></div>
     <h2>Язык</h2><div className="dp-language"><button><span>Интерфейс</span><strong>Русский</strong><ChevronRight/></button><button><span>Разговор с тренером</span><strong>Как пишу сейчас</strong><ChevronRight/></button></div>
+    <h2>Оставаться на связи</h2><section className="dp-contact-card"><Bell/><div><strong>Напомнить о договорённости</strong><p>Если хотите, SKILLER напомнит завтра, даже если Вы не откроете приложение.</p><button>Включить уведомления</button><button className="plain">Добавить e-mail вместо push</button></div></section>
     <p className="dp-privacy">Имя не используется в исследовательской выгрузке. Для пилота применяется внутренний ID.</p>
     <BottomNav active="profile" onSelect={go}/>
   </div>;
