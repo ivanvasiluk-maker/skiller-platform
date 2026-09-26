@@ -7,7 +7,7 @@ import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-i
 import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-continuity";
 import { produceFreeTalkReply } from "@/lib/free-talk";
 import { ensureOpenLoopStorage, createOpenLoop, dueOpenLoop, markFollowUpShown, markFollowUpAnswered, resolveOpenLoop, openLoopForPlan, buildConversationContext, buildOrchestratorInstructions, topicFromText, activeOpenLoops, saveSuccessFactor, saveInterventionMemory, createConversationFollowUp, pendingConversationFollowUp, completeConversationFollowUp, type OpenLoop, type ConversationFollowUp } from "@/lib/conversation-orchestrator";
-import { concreteActionFromText } from "@/lib/conversation-language";
+import { classifyAttemptReport, concreteActionFromText, conversationIntent, missingLinkQuestion } from "@/lib/conversation-language";
 import { advanceComplexAnalysis, applyBehavioralMemoryDraft, behavioralPatternById, buildWorkingHypothesis, chainEditPrompt, chooseChainEditField, clarificationQuestion, completeSituationAnalysis, complexAnalysisQuestion, createSituationAnalysis, dismissBehavioralMemory, ensureConversationAnalysisStorage, interventionPointPrompt, isBareRejection, isHypothesisConfirmed, moveToInterventionChoice, parseChainEditField, parseInterventionPoint, pendingSituationAnalysis, relevantBehavioralPattern, requestSituationCorrection, saveBehavioralPattern, saveInterventionPoint, saveSituationHypothesis, type BehavioralPattern, type InterventionPoint, type SituationAnalysisSession } from "@/lib/conversation-analysis";
 import type { OutcomeReasonCode } from "@/lib/outcome-policy";
 import { recordPilotEvent, type PilotEventPayload } from "@/lib/pilot-events";
@@ -159,8 +159,8 @@ async function createRecommendedPlan(input: {
   await getRawDb().prepare("INSERT INTO trainer_plans (id,user_id,situation_id,skill_json,skill_title,entry_mode,intensity_before,decision_reason_code,decision_version,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
     .bind(input.key, input.user.userId, recommendation.situationId, JSON.stringify(skill), skill.title, input.mode, input.intensity, recommendation.reasonCode ?? "first_try", recommendation.decisionVersion ?? "outcome-policy-v2", new Date().toISOString()).run();
   const reply = concreteAction
-    ? `Гипотезу зафиксировали. Теперь проверим её действием. Первый шаг: «${concreteAction}». Ниже — точная практика; после попытки напишите, что получилось.`
-    : `Гипотезу зафиксировали. Проверим её практикой «${skill.title}». Полная последовательность шагов — ниже.`;
+    ? `Сейчас не будем решать всё целиком. Сделайте один первый шаг: «${concreteAction}». После реальной попытки напишите: «сделал», «частично» или «не сделал».`
+    : `Сейчас — только один следующий шаг: практика «${skill.title}». Выполните короткое действие из карточки и после реальной попытки напишите: «сделал», «частично» или «не сделал».`;
   await message(input.profile, "assistant", reply, `${input.key}:reply`);
   await event(input.profile, input.sessionId, "skill_recommended", input.key, { skill_id: skill.id, decision_reason_code: recommendation.reasonCode ?? "first_try", decision_version: recommendation.decisionVersion ?? "outcome-policy-v2" });
   if (recommendation.analysis) await event(input.profile, input.sessionId, "mechanism_generated", input.key);
@@ -359,6 +359,23 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         await event(profile, body.sessionId, "free_talk_started", body.sessionId);
         await event(profile, body.sessionId, "chat_started", body.sessionId);
         const state = await trainerState(user);
+        const pendingPlan = state.plans.find((plan) => !plan.result);
+        const attemptReport = pendingPlan ? classifyAttemptReport(body.text) : "unknown";
+        if (pendingPlan && attemptReport === "not_done") {
+          const skill = JSON.parse(pendingPlan.skill_json) as SkillView;
+          const loop = state.openLoops.find((item) => item.plan_id === pendingPlan.id) ?? await openLoopForPlan(pendingPlan.id);
+          const loopId = loop?.id ?? pendingPlan.id;
+          await db.prepare("UPDATE trainer_plans SET result='failed' WHERE id=? AND user_id=? AND result IS NULL").bind(pendingPlan.id, user.userId).run();
+          await event(profile, body.sessionId, "outcome_not_done", loopId, { loop_id: loopId });
+          await event(profile, body.sessionId, "missing_link_started", loopId, { loop_id: loopId });
+          if (loop) await resolveOpenLoop(loop.id, "not_done");
+          await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "not_done" });
+          await createConversationFollowUp({ userId: user.userId, planId: pendingPlan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "missing_link" });
+          await message(profile, "assistant", missingLinkQuestion(body.text), `${key}:reply`);
+          const nextState = await trainerState(user);
+          await cacheIdempotentResponse(db, user.userId, key, nextState);
+          return nextState;
+        }
         const ctx = await buildConversationContext({
           userId: user.userId, profile, messages: state.messages.slice(-8), plans: state.plans, engagedDays: state.engagedDays,
           situation: { mode: body.mode ?? "talk" },
@@ -383,7 +400,8 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           urge: body.urge ?? "avoid",
           intensity: body.intensity ?? 5,
         } as const;
-        if (body.analysisDepth === "simple" || body.analysisDepth === "complex") {
+        const directAction = conversationIntent(body.text) === "direct_action_request";
+        if (!directAction && (body.analysisDepth === "simple" || body.analysisDepth === "complex")) {
           const rememberedPattern = await relevantBehavioralPattern(user.userId, situationInput.kind, situationInput.urge);
           const analysis = await createSituationAnalysis({
             user_id: user.userId,

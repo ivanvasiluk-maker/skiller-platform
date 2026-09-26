@@ -1,4 +1,5 @@
 import { getRawDb } from "@/db";
+import { extractShortTrigger } from "./conversation-language.ts";
 
 export type SituationAnalysisStage =
   | "clarify" | "confirm" | "correct"
@@ -168,7 +169,8 @@ const urgeLabels: Record<SituationAnalysisSession["urge"], string> = {
 };
 
 export function buildWorkingHypothesis(session: SituationAnalysisSession, clarification: string) {
-  return `Рабочая гипотеза: когда «${clarification}», первой включается ${signalLabels[session.signal]}, а затем появляется желание ${urgeLabels[session.urge]}. Значит, полезно проверить навык в момент между первым сигналом и привычным действием. Это похоже на Ваш опыт?`;
+  const trigger = extractShortTrigger(clarification);
+  return `Правильно понимаю: когда «${trigger}», первой включается ${signalLabels[session.signal]}, а затем появляется желание ${urgeLabels[session.urge]}? Если это неточно, поправьте одним предложением.`;
 }
 
 export function complexAnalysisQuestion(stage: SituationAnalysisStage) {
