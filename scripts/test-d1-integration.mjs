@@ -529,6 +529,15 @@ try {
 
   const simpleAnalysis = await runEndpoint(baseUrl, "simple-analysis-cycle");
   assert.deepEqual(simpleAnalysis, {
+    returnCycle: {
+      samePlan: true,
+      sameAction: true,
+      successAnalysisStarted: true,
+      successFactorStored: true,
+      loopResolved: true,
+      followUpCompleted: true,
+      noExtraPlan: true,
+    },
     noPlanBeforeConfirmation: true,
     stages: ["clarify", "confirm", "correct", "confirm"],
     correctedHypothesis: true,

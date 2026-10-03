@@ -1183,7 +1183,7 @@ async function runRelationshipCycle(db: D1Database) {
 }
 
 /** Conversation-first: вопрос → гипотеза → исправление → подтверждение → практика. */
-async function runSimpleAnalysisCycle() {
+async function runSimpleAnalysisCycle(db: D1Database) {
   const suffix = crypto.randomUUID();
   const user = {
     userId: `analysis-${suffix}`,
@@ -1206,7 +1206,35 @@ async function runSimpleAnalysisCycle() {
   const corrected = await command({ action: "message", mode: "stuck", text: "Я боюсь не уложиться в срок и поэтому замираю" });
   const completed = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
 
+  // Continue the same confirmed plan in a new session, without replaying onboarding.
+  const plan = completed.plans[0];
+  const loop = completed.openLoops[0];
+  if (!plan || !loop) throw new Error("Confirmed analysis did not persist a plan and open loop");
+  await command({ action: "start", planId: plan.id });
+  await db.prepare("UPDATE open_loops SET follow_up_due=? WHERE id=?")
+    .bind(new Date(Date.now() - 3600000).toISOString(), loop.id).run();
+  const nextSessionId = crypto.randomUUID();
+  const returnCommand = (body: Record<string, unknown>) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId: nextSessionId, ...body });
+  const reopened = await returnCommand({ action: "open" });
+  const reported = await returnCommand({ action: "outcome", planId: plan.id, result: "done", helpfulness: 8 });
+  await returnCommand({ action: "message", mode: "talk", text: "Помогло заранее открыть документ и убрать уведомления" });
+  const afterReturn = await returnCommand({ action: "open" });
+  const factor = await db.prepare("SELECT COUNT(*) AS count FROM success_factors WHERE user_id=?")
+    .bind(user.userId).first<{ count: number }>();
+  const resolved = await db.prepare("SELECT status, outcome FROM open_loops WHERE id=?")
+    .bind(loop.id).first<{ status: string; outcome: string }>();
+
   return {
+    returnCycle: {
+      samePlan: reopened.plans.some(item => item.id === plan.id),
+      sameAction: reopened.dueLoop?.planned_action === loop.planned_action,
+      successAnalysisStarted: reported.pendingFollowUp?.kind === "success",
+      successFactorStored: (factor?.count ?? 0) > 0,
+      loopResolved: resolved?.status === "resolved" && resolved.outcome === "done",
+      followUpCompleted: afterReturn.pendingFollowUp === null,
+      noExtraPlan: afterReturn.plans.length === 1,
+    },
     noPlanBeforeConfirmation: asked.plans.length === 0 && hypothesized.plans.length === 0,
     stages: [
       asked.pendingSituationAnalysis?.stage ?? null,
@@ -1467,7 +1495,7 @@ const worker: ExportedHandler<Env> = {
       return Response.json(await runRelationshipCycle(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/simple-analysis-cycle") {
-      return Response.json(await runSimpleAnalysisCycle());
+      return Response.json(await runSimpleAnalysisCycle(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/behavior-chain-cycle") {
       return Response.json(await runBehaviorChainCycle(env.DB));
