@@ -444,3 +444,8 @@ RecapAttempt/ContinuityPlan получили optional completed_part/stopping_po
 ## 04.10.2026 — N7a: доступ к ранним сообщениям
 
 trainerHistory + GET before: owned cursor, 60 rows/page, no-store, insert order via rowid. TrainerState получает hasEarlierMessages из выборки 61, отдаёт последние 60. UI раскрывает 10 уже доступных сообщений, затем загружает страницы; дедупликация при overlap, сохранение выпавших из свежего окна сообщений, отдельное historyBusy. DOM-якорь удерживает место при раскрытии; текущий вопрос/план/черновик не меняются, история не расширяет AI-вход. D1 /history-cycle: 126 messages, tied times, complete order, distinct IDs, end-of-history, foreign cursor blocked. Typecheck/адресный ESLint/D1 integration/build/diff check PASS. После UI-доработки повторены типы/lint/build; серверный код после integration не менялся. Browser/mobile scroll и live AI не проверены; production не обновлён.
+
+
+## 04.10.2026 — N2a: понятные подписи и обращение
+
+Основной TrainerApp: «Вы», приветствие, простые клиентские описания методов, искусственный интеллект в согласии/подписи. Удалена имитация онлайн-статуса человека: автоматический помощник без зелёной точки. Greeting Марши и рабочая гипотеза recap приведены к «Вы», outcomes заменены «результатов». Обновлена проверка числа результатов в существующем тесте, остальные проверки уверенности сохранены. Typecheck, адресный ESLint, 13 recap-тестов, build, diff check PASS. Настройки персонального обращения/рода и полный аудит остальных экранов не реализованы; живой AI/browser/phone не проверены, production не изменён.

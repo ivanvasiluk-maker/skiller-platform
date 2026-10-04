@@ -124,7 +124,7 @@ test("two helpful outcomes create only a limited working hypothesis", () => {
     }),
   ], [1, 3], "2026-09-14T08:00:00.000Z");
 
-  assert.match(recap.day7.workingHypothesis, /2 сохранённых outcomes/);
+  assert.match(recap.day7.workingHypothesis, /2 сохранённых результатов/);
   assert.equal(recap.day7.confidenceLevel, "limited");
   assert.match(recap.day7.confidence, /не доказывает причину/);
   assert.equal(recap.day7.nextExperiment.kind, "transfer");
