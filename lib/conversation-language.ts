@@ -1,3 +1,4 @@
+import { systemPrompt, type CommunicationPreferences } from "./communication-preferences.ts";
 /**
  * Preserve an action already formulated by the user. The Skill Engine still
  * selects the intervention; this text is only the human-facing agreement and
@@ -41,10 +42,10 @@ export function classifyAttemptReport(text: string): AttemptReport {
   return "unknown";
 }
 
-export function missingLinkQuestion(text: string): string {
+export function missingLinkQuestion(text: string, preferences: CommunicationPreferences = {}): string {
   const compact = text.toLowerCase();
   if (/youtube|ютуб|видео/u.test(compact)) {
-    return "Тогда повторять тот же совет не будем. Что произошло непосредственно перед видео: появилась мысль «это не поможет», стало неприятно начинать или Вы открыли его почти автоматически?";
+    return systemPrompt(preferences, "missingVideo");
   }
-  return "Тогда повторять тот же совет не будем. Что произошло непосредственно перед тем, как Вы отказались от шага: появилась мысль, стало неприятно начинать или Вы переключились почти автоматически?";
+  return systemPrompt(preferences, "missingRefusal");
 }

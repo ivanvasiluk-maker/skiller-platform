@@ -1314,6 +1314,8 @@ async function runCommunicationPreferencesCycle() {
   const asked = await command({ action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю отчёт и открываю новости" });
   const addressed = await command({ action: "settings", addressForm: "informal" });
   const gendered = await command({ action: "settings", grammaticalGender: "feminine" });
+  const revised = await command({ action: "message", mode: "stuck", text: "Мне кажется, я не справлюсь" });
+  const declined = await command({ action: "message", mode: "stuck", text: "Нет" });
   const planned = await command({ action: "message", mode: "stuck", text: "Мне кажется, я не справлюсь" });
   const practice = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
   const duringPractice = await command({ action: "settings", grammaticalGender: "masculine" });
@@ -1331,6 +1333,7 @@ async function runCommunicationPreferencesCycle() {
     persisted: reloaded.profile?.address_form === "formal" && reloaded.profile?.grammatical_gender === "feminine",
     questionPreserved: JSON.stringify(asked.pendingSituationAnalysis) === JSON.stringify(gendered.pendingSituationAnalysis) && JSON.stringify(asked.messages) === JSON.stringify(gendered.messages),
     practicePreserved: planned.pendingSituationAnalysis !== null && practice.plans.length > 0 && JSON.stringify(practice.plans) === JSON.stringify(duringPractice.plans) && restoredGender.profile?.grammatical_gender === "feminine",
+    hypothesisAddress: declined.messages.at(-1)?.text.includes("твоим опытом") === true && revised.pendingSituationAnalysis !== null,
     rejectionAddress: rejected.messages.at(-1)?.text.includes("убеждать тебя") === true,
     userQuotePreserved: explained.messages.some(message => message.role === "user" && message.text === quoted),
     historyPreserved: rejected.messages.every(message => changed.messages.some(saved => saved.id === message.id && saved.text === message.text)),

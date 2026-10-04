@@ -425,7 +425,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           await message(profile, "assistant", pendingPreAnalysis.analysis_depth === "complex" ? `Хорошо. Можно исправлять звенья по одному, пока цепочка не станет точной. ${chainEditPrompt}` : systemPrompt(profile, "reviseHypothesis"), `${key}:reply`);
         } else if (pendingPreAnalysis.analysis_depth === "complex") {
           const sessionForStep = isConfirmationStage ? { ...pendingPreAnalysis, stage: "chain_correct" as const } : pendingPreAnalysis;
-          const reply = await advanceComplexAnalysis(sessionForStep, answer);
+          const reply = await advanceComplexAnalysis(sessionForStep, answer, profile);
           if (sessionForStep.stage === "chain_consequences" || sessionForStep.stage === "chain_correct") {
             await event(profile, body.sessionId, "analysis_hypothesis_shown", pendingPreAnalysis.id);
           }
@@ -452,7 +452,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           if (loop) await resolveOpenLoop(loop.id, "not_done");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "not_done" });
           await createConversationFollowUp({ userId: user.userId, planId: pendingPlan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "missing_link" });
-          await message(profile, "assistant", missingLinkQuestion(body.text), `${key}:reply`);
+          await message(profile, "assistant", missingLinkQuestion(body.text, profile), `${key}:reply`);
           const nextState = await trainerState(user);
           await cacheIdempotentResponse(db, user.userId, key, nextState);
           return nextState;
@@ -499,7 +499,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
             memoryPatternId: rememberedPattern?.id,
           });
           await event(profile, body.sessionId, "analysis_started", analysis.id);
-          const firstQuestion = analysis.analysis_depth === "complex" ? complexAnalysisQuestion(analysis.stage) : clarificationQuestion(analysis.kind);
+          const firstQuestion = analysis.analysis_depth === "complex" ? complexAnalysisQuestion(analysis.stage, profile) : clarificationQuestion(analysis.kind, profile);
           await message(profile, "assistant", firstQuestion, `${key}:reply`);
         } else {
           await createRecommendedPlan(situationInput);

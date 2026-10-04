@@ -1,3 +1,4 @@
+import { systemPrompt, type CommunicationPreferences } from "./communication-preferences";
 import { getRawDb } from "@/db";
 import { extractShortTrigger } from "./conversation-language.ts";
 
@@ -148,11 +149,11 @@ export async function createSituationAnalysis(input: Omit<SituationAnalysisSessi
   return session;
 }
 
-export function clarificationQuestion(kind: SituationAnalysisSession["kind"]) {
-  if (kind === "conflict") return "Вспомните конкретный момент: что человек сказал или сделал прямо перед Вашей реакцией?";
+export function clarificationQuestion(kind: SituationAnalysisSession["kind"], preferences: CommunicationPreferences = {}) {
+  if (kind === "conflict") return systemPrompt(preferences, "conflictQuestion");
   if (kind === "emotion") return "Что произошло непосредственно перед тем, как эмоция стала сильной?";
-  if (kind === "stuck") return "Вспомните момент прямо перед тем, как Вы отложили действие: что произошло или какая мысль мелькнула?";
-  return "Что произошло непосредственно перед этой реакцией? Опишите один конкретный момент.";
+  if (kind === "stuck") return systemPrompt(preferences, "stuckQuestion");
+  return systemPrompt(preferences, "otherQuestion");
 }
 
 const signalLabels: Record<SituationAnalysisSession["signal"], string> = {
@@ -173,15 +174,15 @@ export function buildWorkingHypothesis(session: SituationAnalysisSession, clarif
   return `Правильно понимаю: когда «${trigger}», первой включается ${signalLabels[session.signal]}, а затем появляется желание ${urgeLabels[session.urge]}? Если это неточно, поправьте одним предложением.`;
 }
 
-export function complexAnalysisQuestion(stage: SituationAnalysisStage) {
+export function complexAnalysisQuestion(stage: SituationAnalysisStage, preferences: CommunicationPreferences = {}) {
   switch (stage) {
-    case "chain_trigger": return "Возьмём один конкретный эпизод. Что произошло непосредственно перед тем, как Вы застряли или отреагировали?";
+    case "chain_trigger": return systemPrompt(preferences, "chainTrigger");
     case "chain_thought": return "Что в тот момент мелькнуло в голове? Можно записать точную фразу, образ или смысл.";
     case "chain_emotion_body": return "Какие эмоции и ощущения в теле появились сразу после этой мысли?";
-    case "chain_urge": return "Что Вам захотелось сделать в этот момент — отложить, отвлечься, уйти, спорить или что-то другое?";
-    case "chain_action": return "Что Вы фактически сделали после этого — даже если действием было ничего не делать?";
+    case "chain_urge": return systemPrompt(preferences, "chainUrge");
+    case "chain_action": return systemPrompt(preferences, "chainAction");
     case "chain_consequences": return "Что это дало сразу и к чему привело позже? Например: сначала стало легче, но задача осталась.";
-    default: return "Продолжите описание этого эпизода своими словами.";
+    default: return systemPrompt(preferences, "chainContinue");
   }
 }
 
@@ -210,14 +211,14 @@ const chainTransitions: Partial<Record<SituationAnalysisStage, { field: keyof Si
   edit_consequences: { field: "consequences", next: "chain_confirm" },
 };
 
-export async function advanceComplexAnalysis(session: SituationAnalysisSession, answer: string) {
+export async function advanceComplexAnalysis(session: SituationAnalysisSession, answer: string, preferences: CommunicationPreferences = {}) {
   const transition = chainTransitions[session.stage];
   if (!transition) throw new Error("Этап поведенческой цепочки не найден.");
   const chain = { ...readSituationChain(session), [transition.field]: answer };
   const hypothesis = transition.next === "chain_confirm" ? buildChainHypothesis(session, chain) : session.hypothesis;
   await getRawDb().prepare("UPDATE conversation_analysis_sessions SET stage=?,chain_json=?,hypothesis=?,updated_at=? WHERE id=? AND status='pending'")
     .bind(transition.next, JSON.stringify(chain), hypothesis, new Date().toISOString(), session.id).run();
-  return transition.next === "chain_confirm" ? hypothesis : complexAnalysisQuestion(transition.next);
+  return transition.next === "chain_confirm" ? hypothesis : complexAnalysisQuestion(transition.next, preferences);
 }
 
 export function isHypothesisConfirmed(text: string) {
