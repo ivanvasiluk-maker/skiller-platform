@@ -1250,6 +1250,37 @@ async function runQuickStopCycle() {
   return { cases, safetyBlocked: Boolean(unsafe.profile?.safety_flag) && unsafe.plans.length === 0 };
 }
 
+async function runPauseCycle(db: D1Database) {
+  const id = crypto.randomUUID();
+  const user = { userId: `pause-${id}`, displayName: "Pause", email: `${id}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "beck", text: "Откладываю работу", consent: true });
+  const state = await command({ action: "situation", analysisDepth: "direct", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Помоги начать отчёт с маленького шага" });
+  const plan = state.plans[0];
+  const loop = state.openLoops.find(item => item.plan_id === plan.id);
+  if (!plan || !loop) throw new Error("Missing practice");
+  const paused = await command({ action: "pause", planId: plan.id });
+  const returned = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  let staleStartBlocked = false;
+  try { await command({ action: "start", planId: plan.id }); } catch { staleStartBlocked = true; }
+  const attempts = await db.prepare("SELECT COUNT(*) AS count FROM skill_attempts WHERE user_id=?").bind(user.userId).first<{ count: number }>();
+  await command({ action: "newSituation" });
+  const newAnalysis = await command({ action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю уборку кухни" });
+  let analysisBlocksResume = false;
+  try { await command({ action: "resume", planId: plan.id }); } catch { analysisBlocksResume = true; }
+  await command({ action: "newSituation", analysisId: newAnalysis.pendingSituationAnalysis?.id });
+  const resumed = await command({ action: "resume", planId: plan.id });
+  await command({ action: "start", planId: plan.id });
+  await command({ action: "performance", planId: plan.id, result: "partial" });
+  const requestId = crypto.randomUUID();
+  const reportedPause = await command({ action: "pause", planId: plan.id, requestId });
+  const duplicate = await command({ action: "pause", planId: plan.id, requestId });
+  const reportedResume = await command({ action: "resume", planId: plan.id });
+  const outcomes = await db.prepare("SELECT COUNT(*) AS count FROM outcomes WHERE attempt_id=?").bind(reportedResume.plans[0].attempt_id).first<{ count: number }>();
+  return { noFakeAttempt: attempts?.count === 0, noFakeResult: paused.plans[0].result === null && paused.plans[0].helpfulness === null, persisted: Boolean(returned.plans[0].paused), noActiveReminder: !paused.openLoops.some(item => item.plan_id === plan.id && item.status === "active") && !paused.continuity.openLoop, staleStartBlocked, analysisBlocksResume, sameStep: resumed.plans[0].id === plan.id && resumed.openLoops.find(item => item.plan_id === plan.id)?.planned_action === loop.planned_action, reportPreserved: reportedResume.plans[0].reported_result === "partial" && reportedResume.plans[0].result === null && outcomes?.count === 0, idempotent: reportedPause.messages.length === duplicate.messages.length };
+}
+
 async function runNewSituationCycle() {
   const id = crypto.randomUUID();
   const user = { userId: `new-situation-${id}`, displayName: "New Situation", email: `${id}@example.invalid`, fullName: null };
@@ -1589,6 +1620,7 @@ const worker: ExportedHandler<Env> = {
     if (request.method === "POST" && url.pathname === "/quick-stop-cycle") {
       return Response.json(await runQuickStopCycle());
     }
+    if (request.method === "POST" && url.pathname === "/pause-cycle") return Response.json(await runPauseCycle(env.DB));
     if (request.method === "POST" && url.pathname === "/new-situation-cycle") return Response.json(await runNewSituationCycle());
     if (request.method === "POST" && url.pathname === "/simple-analysis-cycle") {
       return Response.json(await runSimpleAnalysisCycle(env.DB));

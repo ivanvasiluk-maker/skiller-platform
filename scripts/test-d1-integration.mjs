@@ -539,6 +539,9 @@ try {
     }
   }
 
+  const pauseCycle = await runEndpoint(baseUrl, "pause-cycle");
+  for (const [key, value] of Object.entries(pauseCycle)) assert.equal(value, true, `Pause: ${key}`);
+
   const newSituation = await runEndpoint(baseUrl, "new-situation-cycle");
   for (const [key, value] of Object.entries(newSituation)) assert.equal(value, true, `New situation: ${key}`);
 

@@ -11,7 +11,7 @@ import { buildFreeTalkInstructions, getCharacterBible } from "./character-bible.
 import type { OutcomeReasonCode } from "./outcome-policy.ts";
 import { recentBehavioralPatterns } from "./conversation-analysis.ts";
 
-export type OpenLoopStatus = "active" | "answered" | "resolved" | "expired";
+export type OpenLoopStatus = "active" | "answered" | "resolved" | "expired" | "paused";
 
 export type OpenLoop = {
   id: string;
@@ -398,7 +398,7 @@ export async function buildConversationContext(input: {
 }): Promise<ConversationContext> {
   const loops = input.profile ? await activeOpenLoops(input.userId) : [];
   const behavioralPatterns = input.profile ? await recentBehavioralPatterns(input.userId) : [];
-  const continuity: TrainerContinuity = buildTrainerContinuity(input.plans, {
+  const continuity: TrainerContinuity = buildTrainerContinuity(input.plans.filter(plan => !plan.paused), {
     day: input.profile ? dayIndex(input.profile.created_at) : 1,
     startedAt: input.profile?.created_at,
     safetyAllowsPractice: !input.profile?.safety_flag,
