@@ -296,14 +296,18 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
 function Score({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) { return <label className="trainer-score"><span>{label} <strong>{value}/10</strong></span><input type="range" min={0} max={10} value={value} onChange={e => onChange(Number(e.target.value))}/></label>; }
 function PlanCard({ plan, plannedAction, busy, command }: { plan: TrainerPlan; plannedAction?: string; busy: boolean; command: (p: Record<string, unknown>) => Promise<TrainerState | null> }) {
   const skill = JSON.parse(plan.skill_json) as SkillView;
+  const durationLabel = `${Math.floor(skill.durationSeconds / 60)}:${String(skill.durationSeconds % 60).padStart(2, "0")}`;
+  const displaySteps = skill.steps.map(step => skill.id === "distract-delay" && step.copy === "Вернитесь к задаче на пять минут, затем решите заново."
+    ? { ...step, copy: "Вернитесь к задаче на выбранный посильный интервал, затем решите заново." }
+    : step);
   const concreteAction = plannedAction && plannedAction !== skill.title ? plannedAction : null;
   const [helpfulness, setHelpfulness] = useState<number | null>(null);
   const [after, setAfter] = useState<number | null>(null);
   const [remaining, setRemaining] = useState(skill.durationSeconds);
-  useEffect(() => { if (!plan.attempt_id) return; const timer = setInterval(() => setRemaining(v => Math.max(0, v - 1)), 1000); return () => clearInterval(timer); }, [plan.attempt_id]);
+  useEffect(() => { if (!plan.attempt_id || plan.reported_result) return; const timer = setInterval(() => setRemaining(v => Math.max(0, v - 1)), 1000); return () => clearInterval(timer); }, [plan.attempt_id, plan.reported_result]);
   return (
     <section className="trainer-plan">
-      <span className="trainer-kicker">ОДНО ПОСИЛЬНОЕ ДЕЙСТВИЕ · {Math.ceil(skill.durationSeconds / 60)} МИН</span>
+      <span className="trainer-kicker">ОДНО ПОСИЛЬНОЕ ДЕЙСТВИЕ · ОРИЕНТИР {durationLabel}</span>
       <h2>{concreteAction ?? skill.title}</h2>
       <p>{concreteAction ? "Сейчас достаточно сделать только этот шаг. После него можно остановиться и написать тренеру." : skill.description}</p>
       <p className="trainer-decision-reason"><strong>{concreteAction ? `Навык для тренировки: ${skill.title}` : "Почему такой шаг"}</strong><span>{concreteAction ? skill.description : explainDecisionReason(plan.decision_reason_code)}</span></p>
@@ -313,12 +317,12 @@ function PlanCard({ plan, plannedAction, busy, command }: { plan: TrainerPlan; p
       {skill.id === "grounding-543" && <GroundingExample plannedAction={concreteAction} />}
       <SkillExample skillId={skill.id} plannedAction={concreteAction} />
       <span className="trainer-kicker">ШАГИ ПРАКТИКИ</span>
-      <ol>{skill.steps.map((step) => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
+      <ol>{displaySteps.map((step) => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
       {!plan.attempt_id ? (
         <div className="trainer-actions"><button className="trainer-primary" disabled={busy} onClick={() => command({ action: "start", planId: plan.id })}>Начать действие <Play size={16}/></button><button className="trainer-secondary" disabled={busy} onClick={() => command({ action: "reject", planId: plan.id })}>Шаг не подходит</button></div>
       ) : (
         <>
-          <div className="trainer-timer">{Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}<small>Ориентир, не экзамен. Закончить можно раньше.</small></div>
+          <div className="trainer-timer">{Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}<small>Ориентир практики. Можно закончить раньше или продолжить; ноль на таймере не означает выполнение.</small></div>
           {!plan.reported_result ? <>
             <h3>Что удалось сделать?</h3>
             <div className="trainer-actions">
