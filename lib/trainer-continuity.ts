@@ -8,8 +8,10 @@ export type ContinuityPlan = {
   skill_title: string;
   entry_mode: string;
   attempt_id: string | null;
-  result: "done" | "failed" | "more" | null;
+  result: "done" | "partial" | "failed" | "more" | null;
   helpfulness: number | null;
+  reported_result?: "done" | "partial" | "failed" | "more" | null;
+  worsened?: number | null;
   decision_reason_code: OutcomeReasonCode;
   created_at: string;
 };
@@ -23,7 +25,7 @@ export type TrainerContinuity = {
   } | null;
   lastOutcome: {
     planId: string;
-    result: "done" | "failed" | "more";
+    result: "done" | "partial" | "failed" | "more";
     helpfulness: number | null;
     createdAt: string;
   } | null;
@@ -39,7 +41,7 @@ export type TrainerContinuity = {
     planId: string;
     skillTitle: string;
     entryMode: string;
-    result: "done" | "failed" | "more" | null;
+    result: "done" | "partial" | "failed" | "more" | null;
     prompt: string;
     actionLabel: string;
   } | null;
@@ -104,6 +106,7 @@ function dayOnePlan(plans: ContinuityPlan[], startedAt?: string) {
 
 function outcomeLabel(result: NonNullable<ContinuityPlan["result"]>) {
   if (result === "done") return "получилось";
+  if (result === "partial") return "частично";
   if (result === "more") return "сделал больше запланированного";
   return "не получилось";
 }
@@ -139,8 +142,8 @@ function buildDay2CheckIn(
       skillTitle: plan.skill_title,
       entryMode: plan.entry_mode,
       result: null,
-      prompt: `Вчера выбрали действие «${plan.skill_title}». Что получилось по факту: сделал, не получилось или сделал больше?`,
-      actionLabel: "Отметить результат",
+      prompt: plan.reported_result ? "Ответ о выполнении сохранён. Осталось оценить пользу; повторять практику не нужно." : `Вчера выбрали действие «${plan.skill_title}». Что получилось по факту: сделал, не получилось или сделал больше?`,
+      actionLabel: plan.reported_result ? "Оценить пользу" : "Отметить результат",
     };
   }
 
@@ -293,7 +296,7 @@ function buildGapReturn(
     const next =
       openLoop.kind === "failed"
         ? "Сохранённый результат остаётся на месте: можно уменьшить шаг или выбрать другой навык."
-        : `Сохранённое действие «${openLoop.skillTitle}» всё ещё ждёт фактического результата.`;
+        : current?.reported_result ? "Ответ о выполнении сохранён. Можно вернуться к оценке пользы без повторения практики." : `Сохранённое действие «${openLoop.skillTitle}» всё ещё ждёт фактического результата.`;
     return {
       ...base,
       planId: openLoop.planId,
@@ -351,10 +354,10 @@ export function buildTrainerContinuity(
       skillTitle: current.skill_title,
       entryMode: current.entry_mode,
       kind: started ? "started" : "suggested",
-      prompt: started
+      prompt: current.reported_result ? "Ответ о выполнении уже сохранён. Осталось оценить пользу; практику повторять не нужно." : started
         ? "Ты уже начал это действие. Вернёмся и честно отметим, чем закончилась попытка."
         : "Этот шаг уже выбран и сохранён. Можно вернуться к нему без нового разбора ситуации.",
-      actionLabel: started ? "Отметить результат" : "Открыть действие",
+      actionLabel: current.reported_result ? "Оценить пользу" : started ? "Отметить результат" : "Открыть действие",
     };
   }
 

@@ -527,6 +527,9 @@ try {
     },
   });
 
+  const separateOutcome = await runEndpoint(baseUrl, "separate-outcome-cycle");
+  for (const [key, value] of Object.entries(separateOutcome)) assert.equal(value, true, `Separate outcome: ${key}`);
+
   const quickStop = await runEndpoint(baseUrl, "quick-stop-cycle");
   assert.equal(quickStop.safetyBlocked, true);
   assert.equal(quickStop.cases.length, 4);

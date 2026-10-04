@@ -166,3 +166,19 @@ test("an unresolved week ends with closing the open loop", () => {
   assert.equal(recap.day7.nextExperiment.kind, "close_loop");
   assert.match(recap.day7.workingHypothesis, /outcome неизвестен/);
 });
+
+
+test("execution report survives without inventing a benefit rating", () => {
+  const recap = buildRecap([plan({ attempt_id: "attempt-1", reported_result: "partial" })]);
+  assert.match(recap.facts[0], /частично.*польза пока не оценена/);
+  assert.ok(recap.unknown.every(text => !text.includes("результат пока неизвестен")));
+  assert.equal(recap.completed, 0);
+  assert.equal(recap.outcomesRecorded, 0);
+});
+
+test("worsening remains distinct from execution and a numeric rating", () => {
+  const recap = buildRecap([plan({ attempt_id: "attempt-1", result: "done", helpfulness: 0, worsened: 1 })]);
+  assert.match(recap.facts[0], /после практики стало хуже/);
+  assert.ok(!recap.facts[0].includes("0/10"));
+  assert.deepEqual(recap.helpful, []);
+});

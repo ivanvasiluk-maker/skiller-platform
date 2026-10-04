@@ -37,7 +37,7 @@ export type TrainerId = keyof typeof trainers;
 export const interactionModes = { support: "Поддержи меня", explore: "Давай спокойно разберём", direct: "Говори прямо" } as const;
 export type InteractionMode = keyof typeof interactionModes;
 export type EntryMode = "practice" | "stuck" | "distress" | "talk";
-export type ActionResult = "done" | "failed" | "more";
+export type ActionResult = "done" | "partial" | "failed" | "more";
 
 export function dayIndex(start: string, now = new Date()) {
   const parsed = Date.parse(start.includes("T") ? start : start.replace(" ", "T") + "Z");
@@ -57,6 +57,8 @@ export type RecapAttempt = {
   result: ActionResult | null;
   helpfulness: number | null;
   skill_title: string;
+  reported_result?: ActionResult | null;
+  worsened?: number | null;
   created_at: string;
 };
 
@@ -66,6 +68,7 @@ function unique(values: string[]) {
 
 function recapResult(result: ActionResult) {
   if (result === "done") return "получилось";
+  if (result === "partial") return "частично";
   if (result === "more") return "сделано больше запланированного";
   return "не получилось";
 }
@@ -146,7 +149,7 @@ function buildDay7Insight(input: {
       latestDifficult.helpfulness !== null &&
       latestDifficult.helpfulness <= 3;
     const evidence =
-      latestDifficult.helpfulness === null
+      latestDifficult.worsened ? `${recapResult(latestDifficult.result!)}, после практики стало хуже` : latestDifficult.helpfulness === null
         ? recapResult(latestDifficult.result!)
         : `${recapResult(latestDifficult.result!)}, полезность ${latestDifficult.helpfulness}/10`;
     workingHypothesis = `Рабочая гипотеза: «${latestDifficult.skill_title}» в прежнем виде пока не подтверждён как полезный. Основание — сохранённый outcome: ${evidence}. Причина результата неизвестна.`;
@@ -215,12 +218,13 @@ export function buildRecap(
 
   const facts = scopedPlans.map((plan) => {
     if (plan.result === null) {
+      if (plan.reported_result) return `«${plan.skill_title}»: ${recapResult(plan.reported_result)}; польза пока не оценена.`;
       return plan.attempt_id
         ? `«${plan.skill_title}»: попытка начата; итог не отмечен.`
         : `«${plan.skill_title}»: действие предложено; неизвестно, была ли попытка.`;
     }
     const helpfulness =
-      plan.helpfulness === null
+      plan.worsened ? "после практики стало хуже" : plan.helpfulness === null
         ? "полезность не оценена"
         : `полезность ${plan.helpfulness}/10`;
     return `«${plan.skill_title}»: ${recapResult(plan.result)}; ${helpfulness}.`;
@@ -228,7 +232,7 @@ export function buildRecap(
 
   const unknown = unique([
     ...unresolved.map(
-      (plan) => `Для «${plan.skill_title}» результат пока неизвестен.`,
+      (plan) => plan.reported_result ? `Для «${plan.skill_title}» польза пока не оценена.` : `Для «${plan.skill_title}» результат пока неизвестен.`,
     ),
     ...missingHelpfulness.map(
       (plan) => `Для «${plan.skill_title}» полезность не оценена.`,

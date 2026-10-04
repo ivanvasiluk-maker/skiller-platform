@@ -1183,6 +1183,36 @@ async function runRelationshipCycle(db: D1Database) {
 }
 
 /** Conversation-first: вопрос → гипотеза → исправление → подтверждение → практика. */
+async function runSeparateOutcomeCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const user = { userId: `separate-${suffix}`, displayName: "Outcome Test", email: `${suffix}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "marsha", text: "Хочу делать паузу перед ответом", consent: true });
+  const prepared = await command({ action: "quickStop", text: "Хочу остановиться перед резким ответом", intensity: 5, risk: "no", urge: "attack" });
+  const plan = prepared.plans[0];
+  await command({ action: "start", planId: plan.id });
+  await command({ action: "performance", planId: plan.id, result: "partial" });
+  const reopened = await command({ action: "open", sessionId: crypto.randomUUID() });
+  const beforeBenefit = await db.prepare("SELECT COUNT(*) AS count FROM outcomes WHERE user_id=?").bind(user.userId).first<{ count: number }>();
+  let contradictionBlocked = false;
+  try { await command({ action: "outcome", planId: plan.id, result: "done", helpfulness: 8, intensity: 4 }); } catch { contradictionBlocked = true; }
+  const worsened = await command({ action: "outcome", planId: plan.id, result: "partial", helpfulness: 0, intensity: 7, worsened: true });
+  const outcome = await db.prepare("SELECT completed,helpfulness,note FROM outcomes WHERE user_id=?").bind(user.userId).first<{ completed: number; helpfulness: number; note: string }>();
+  const afterExplanation = await command({ action: "message", mode: "talk", text: "Напряжение усилилось, когда я наблюдал за собой" });
+  const next = await command({ action: "quickStop", text: "Хочу сделать паузу перед ответом", intensity: 4, risk: "no", urge: "attack" });
+  return {
+    resumedBenefit: reopened.plans[0].reported_result === "partial" && reopened.plans[0].result === null,
+    benefitUnknown: reopened.plans[0].helpfulness === null && beforeBenefit?.count === 0,
+    contradictionBlocked,
+    worseningStored: worsened.plans[0].worsened === 1 && outcome?.note === "benefit:worsened",
+    noFullCompletion: outcome?.completed === 0,
+    noSuccessFollowUp: worsened.pendingFollowUp?.kind === "worsened",
+    explanationSaved: afterExplanation.pendingFollowUp === null,
+    replacement: JSON.parse(next.plans[0].skill_json).id !== "stop",
+  };
+}
+
 async function runQuickStopCycle() {
   const cases = [];
   for (const outcome of ["done", "partial", "failed", "reject"] as const) {
@@ -1530,6 +1560,9 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/relationship-cycle") {
       return Response.json(await runRelationshipCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/separate-outcome-cycle") {
+      return Response.json(await runSeparateOutcomeCycle(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/quick-stop-cycle") {
       return Response.json(await runQuickStopCycle());

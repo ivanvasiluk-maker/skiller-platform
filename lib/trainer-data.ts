@@ -17,11 +17,12 @@ import { trainers, PRODUCT_VERSION, dayIndex, requiresSafetyRoute, safetyMessage
 
 export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
 export type TrainerMessage = { id: string; role: "user" | "assistant"; text: string; trainer_id: TrainerId; created_at: string };
-export type TrainerPlan = { id: string; situation_id: string; skill_json: string; skill_title: string; entry_mode: string; intensity_before: number; intensity_after: number | null; attempt_id: string | null; result: "done" | "failed" | "more" | null; helpfulness: number | null; decision_reason_code: OutcomeReasonCode; decision_version: string; created_at: string };
+export type TrainerPlan = { id: string; situation_id: string; skill_json: string; skill_title: string; entry_mode: string; intensity_before: number; intensity_after: number | null; attempt_id: string | null; result: "done" | "partial" | "failed" | "more" | null; reported_result?: "done" | "partial" | "failed" | "more" | null; worsened?: number | null; helpfulness: number | null; decision_reason_code: OutcomeReasonCode; decision_version: string; created_at: string };
 export type ContextualMemory = Pick<BehavioralPattern, "id" | "thought" | "urge" | "action" | "intervention_point" | "occurrence_count">;
 export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity; openLoops: OpenLoop[]; dueLoop: OpenLoop | null; pendingFollowUp: ConversationFollowUp | null; pendingSituationAnalysis: SituationAnalysisSession | null; contextualMemory: ContextualMemory | null };
 
 const statements = [
+  "CREATE TABLE IF NOT EXISTS trainer_outcome_reports (plan_id TEXT PRIMARY KEY,user_id TEXT NOT NULL,reported_result TEXT NOT NULL,worsened INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS trainer_profiles (user_id TEXT PRIMARY KEY, pseudonym TEXT NOT NULL UNIQUE, name TEXT NOT NULL, trainer_id TEXT NOT NULL, interaction_mode TEXT NOT NULL DEFAULT 'explore', main_problem TEXT NOT NULL, consent_version TEXT NOT NULL, created_at TEXT NOT NULL, last_interaction_at TEXT NOT NULL, safety_flag INTEGER NOT NULL DEFAULT 0)",
   "CREATE TABLE IF NOT EXISTS trainer_messages (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, role TEXT NOT NULL, text TEXT NOT NULL, trainer_id TEXT NOT NULL, created_at TEXT NOT NULL)",
   "CREATE INDEX IF NOT EXISTS trainer_messages_user ON trainer_messages(user_id, created_at)",
@@ -63,7 +64,7 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
   if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [], continuity: buildTrainerContinuity([]), openLoops: [], dueLoop: null, pendingFollowUp: null, pendingSituationAnalysis: null, contextualMemory: null };
   const [messages, plans, days, loops, due, pendingFollowUp, pendingPreAnalysis] = await Promise.all([
     db.prepare("SELECT * FROM (SELECT id,role,text,trainer_id,created_at FROM trainer_messages WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 60) ORDER BY created_at,id").bind(user.userId).all<TrainerMessage>(),
-    db.prepare("SELECT * FROM trainer_plans WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 100").bind(user.userId).all<TrainerPlan>(),
+    db.prepare("SELECT p.*,r.reported_result,r.worsened FROM trainer_plans p LEFT JOIN trainer_outcome_reports r ON r.plan_id=p.id AND r.user_id=p.user_id WHERE p.user_id=? ORDER BY p.created_at DESC,p.rowid DESC LIMIT 100").bind(user.userId).all<TrainerPlan>(),
     db.prepare("SELECT DISTINCT day_index FROM pilot_events WHERE user_id=? AND event_name='engaged_return' ORDER BY day_index").bind(profile.pseudonym).all<{ day_index: number }>(),
     activeOpenLoops(user.userId),
     dueOpenLoop(user.userId),
@@ -176,7 +177,7 @@ async function createRecommendedPlan(input: {
 }
 
 const bodySchema = z.object({
-  action: z.enum(["onboard", "settings", "open", "message", "situation", "confirmMemory", "dismissMemory", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain", "quickStop"]),
+  action: z.enum(["onboard", "settings", "open", "message", "situation", "confirmMemory", "dismissMemory", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain", "quickStop", "performance"]),
   requestId: z.string().uuid(), sessionId: z.string().uuid(),
   name: z.string().trim().min(1).max(60).optional(), trainerId: z.enum(["marsha", "beck", "skinny"]).optional(),
   interactionMode: z.enum(["support", "explore", "direct"]).optional(), text: z.string().trim().max(1200).optional(), consent: z.boolean().optional(),
@@ -185,6 +186,7 @@ const bodySchema = z.object({
   signal: z.enum(["thought", "body", "emotion", "urge"]).optional(), urge: z.enum(["avoid", "distract", "attack", "withdraw"]).optional(),
   analysisDepth: z.enum(["simple", "complex", "direct"]).optional(),
   planId: z.string().uuid().optional(), result: z.enum(["done", "failed", "more", "partial"]).optional(),
+  worsened: z.boolean().optional(),
   helpfulness: z.number().int().min(0).max(10).optional(), understood: z.number().int().min(0).max(10).optional(), continueIntent: z.number().int().min(0).max(10).optional(),
   helped: z.string().max(800).optional(), annoyed: z.string().max(800).optional(), recapDay: z.union([z.literal(3), z.literal(7)]).optional(),
 }).strict();
@@ -296,6 +298,9 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           await saveSuccessFactor({ userId: user.userId, loopId: pendingAnalysis.loop_id, factor: answer });
           await event(profile, body.sessionId, "success_factor_identified", pendingAnalysis.id, { loop_id: pendingAnalysis.loop_id ?? pendingAnalysis.plan_id });
           await message(profile, "assistant", `Сохранил: «${answer}». В похожей ситуации я напомню об этом как о том, что уже помогало.`, `${key}:reply`);
+        } else if (pendingAnalysis.kind === "worsened") {
+          await saveInterventionMemory({ userId: user.userId, skillId: pendingAnalysis.skill_id, loopId: pendingAnalysis.loop_id, outcome: "worsened", rejectionReason: answer });
+          await message(profile, "assistant", "Сохранил, что стало хуже. Эту практику сейчас не повторяем. Можно сделать паузу или обсудить другой способ со специалистом.", `${key}:reply`);
         } else if (pendingAnalysis.kind === "chain") {
           await saveInterventionMemory({ userId: user.userId, skillId: pendingAnalysis.skill_id, loopId: pendingAnalysis.loop_id, outcome: "partial", chainBreakPoint: answer });
           await event(profile, body.sessionId, "chain_analysis_completed", pendingAnalysis.id, { loop_id: pendingAnalysis.loop_id ?? pendingAnalysis.plan_id });
@@ -382,7 +387,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         const state = await trainerState(user);
         const pendingPlan = state.plans.find((plan) => !plan.result);
         const attemptReport = pendingPlan ? classifyAttemptReport(body.text) : "unknown";
-        if (pendingPlan && attemptReport === "not_done") {
+        if (pendingPlan && !pendingPlan.reported_result && attemptReport === "not_done") {
           const skill = JSON.parse(pendingPlan.skill_json) as SkillView;
           const loop = state.openLoops.find((item) => item.plan_id === pendingPlan.id) ?? await openLoopForPlan(pendingPlan.id);
           const loopId = loop?.id ?? pendingPlan.id;
@@ -401,7 +406,9 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           userId: user.userId, profile, messages: state.messages.slice(-8), plans: state.plans, engagedDays: state.engagedDays,
           situation: { mode: body.mode ?? "talk" },
         });
-        const replyText = due
+        const replyText = pendingPlan?.reported_result
+          ? "Ответ о выполнении уже сохранён. В карточке можно отдельно оценить пользу или отметить, что стало хуже. Повторять практику для этого не нужно."
+          : due
           ? `Возвращаюсь к нашей договорённости: «${due.planned_action}». Как прошло — получилось, частично или не получилось?`
           : await freeTalk(profile, state.messages.slice(-8), buildOrchestratorInstructions(ctx));
         await message(profile, "assistant", replyText, `${key}:reply`);
@@ -444,7 +451,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         }
       }
     }
-    if (["start", "outcome", "reject", "resize", "replace"].includes(body.action)) {
+    if (["start", "performance", "outcome", "reject", "resize", "replace"].includes(body.action)) {
       const plan = await db.prepare("SELECT * FROM trainer_plans WHERE id=? AND user_id=?").bind(body.planId ?? "", user.userId).first<TrainerPlan>();
       if (!plan) throw new Error("Практика не найдена.");
       if (profile.safety_flag) throw new Error("Сначала завершите проверку безопасности.");
@@ -465,27 +472,46 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "rejection" });
         await message(profile, "assistant", "Хорошо, не буду убеждать Вас использовать этот шаг. Что именно не подошло: формулировка, само действие, момент или что-то другое?", `${key}:reply`);
       }
+      if (body.action === "performance" && !plan.result) {
+        if (!plan.attempt_id || !body.result) throw new Error("Начните практику и укажите, что удалось сделать.");
+        const previous = await db.prepare("SELECT reported_result FROM trainer_outcome_reports WHERE plan_id=? AND user_id=?").bind(plan.id, user.userId).first<{ reported_result: string }>();
+        if (previous && previous.reported_result !== body.result) throw new Error("Результат уже сохранён. Перейдите к оценке пользы.");
+        await db.prepare("INSERT OR IGNORE INTO trainer_outcome_reports (plan_id,user_id,reported_result,created_at) VALUES (?,?,?,?)").bind(plan.id, user.userId, body.result, new Date().toISOString()).run();
+      }
       if (body.action === "outcome" && !plan.result) {
+        const report = await db.prepare("SELECT reported_result FROM trainer_outcome_reports WHERE plan_id=? AND user_id=?").bind(plan.id, user.userId).first<{ reported_result: string }>();
+        if (report && report.reported_result !== body.result) throw new Error("Оценка пользы должна относиться к сохранённому результату.");
+        if (body.worsened && body.helpfulness !== 0) throw new Error("Для ответа «стало хуже» используется отдельная отметка без положительной оценки пользы.");
+
         if (!plan.attempt_id || !body.result || body.helpfulness === undefined || (plan.entry_mode === "distress" && body.intensity === undefined)) throw new Error("Начните практику и укажите результат.");
         await completeAttempt(user, {
           attemptId: plan.attempt_id,
-          completed: body.result !== "failed",
+          completed: body.result === "done" || body.result === "more",
           reliefDelta: plan.intensity_before - (body.intensity ?? plan.intensity_before),
           goalProgress: body.result === "more" ? 10 : body.result === "done" ? 5 : 0,
           helpfulness: body.helpfulness,
           avoidance: false,
+          note: body.worsened ? "benefit:worsened" : undefined,
         });
         await db.prepare("UPDATE trainer_plans SET result=?,helpfulness=?,intensity_after=? WHERE id=? AND user_id=? AND result IS NULL").bind(body.result, body.helpfulness, body.intensity ?? null, plan.id, user.userId).run();
         await event(profile, body.sessionId, body.result === "failed" ? "action_failed" : "action_done", plan.id, { skill_id: skill.id, outcome: body.result });
-        await event(profile, body.sessionId, "helpfulness_rated", plan.id, { skill_id: skill.id, score: body.helpfulness });
+        if (!body.worsened) await event(profile, body.sessionId, "helpfulness_rated", plan.id, { skill_id: skill.id, score: body.helpfulness });
+        if (body.worsened) await db.prepare("INSERT INTO trainer_outcome_reports (plan_id,user_id,reported_result,worsened,created_at) VALUES (?,?,?,1,?) ON CONFLICT(plan_id) DO UPDATE SET worsened=1").bind(plan.id, user.userId, body.result, new Date().toISOString()).run();
         await event(profile, body.sessionId, "day_completed", String(dayIndex(profile.created_at)), { skill_id: skill.id });
-        if (plan.entry_mode === "practice" && body.result !== "failed") await event(profile, body.sessionId, "training_completed", plan.id, { skill_id: skill.id });
+        if (plan.entry_mode === "practice" && (body.result === "done" || body.result === "more")) await event(profile, body.sessionId, "training_completed", plan.id, { skill_id: skill.id });
         if (plan.entry_mode === "distress") await event(profile, body.sessionId, "distress_flow_completed", plan.id, { skill_id: skill.id, before: plan.intensity_before, after: body.intensity! });
         await engage(profile, body.sessionId);
         // PATCH 1.1: четыре ветки результата + закрытие open loop + персистентная память.
         const loop = await openLoopForPlan(plan.id);
         const loopId = loop?.id ?? plan.id;
-        if (body.result === "done") {
+        if (body.worsened) {
+          const execution = body.result === "partial" ? "partial" : body.result === "failed" ? "not_done" : "done";
+          if (loop) await resolveOpenLoop(loop.id, execution);
+          await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: execution });
+          await saveInterventionMemory({ userId: user.userId, skillId: skill.id, loopId: loop?.id ?? null, outcome: "worsened" });
+          await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "worsened" });
+          await message(profile, "assistant", "Сохранил отдельно: что удалось сделать и что после практики стало хуже. Пока остановите эту практику. Что именно усилилось? Если есть непосредственная опасность, обратитесь за живой помощью; в ЕС — 112.", `${key}:reply`);
+        } else if (body.result === "done") {
           await event(profile, body.sessionId, "outcome_done", loopId, { loop_id: loopId });
           if (loop) await resolveOpenLoop(loop.id, "done");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "done" });

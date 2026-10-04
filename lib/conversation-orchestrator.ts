@@ -206,7 +206,7 @@ export type InterventionMemoryEntry = {
   created_at: string;
 };
 
-export type ConversationFollowUpKind = "success" | "chain" | "missing_link" | "rejection";
+export type ConversationFollowUpKind = "success" | "chain" | "missing_link" | "rejection" | "worsened";
 export type ConversationFollowUp = {
   id: string;
   user_id: string;
