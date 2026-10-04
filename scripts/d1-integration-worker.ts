@@ -1183,6 +1183,43 @@ async function runRelationshipCycle(db: D1Database) {
 }
 
 /** Conversation-first: вопрос → гипотеза → исправление → подтверждение → практика. */
+async function runQuickStopCycle() {
+  const cases = [];
+  for (const outcome of ["done", "partial", "failed", "reject"] as const) {
+    const suffix = crypto.randomUUID();
+    const user = { userId: `quick-stop-${suffix}`, displayName: "STOP Test", email: `${suffix}@example.invalid`, fullName: null };
+    const sessionId = crypto.randomUUID();
+    const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+    await command({ action: "onboard", name: "Тест", trainerId: "marsha", text: "Хочу делать паузу перед ответом", consent: true });
+    const requestId = crypto.randomUUID();
+    const payload = { action: "quickStop", text: "Хочу сделать паузу перед ответом коллеге", intensity: 4, risk: "no", urge: "attack", requestId, sessionId };
+    const prepared = await trainerCommand(user, payload);
+    const duplicate = await trainerCommand(user, payload);
+    const plan = prepared.plans[0];
+    let blocked = false;
+    try { await command({ ...payload, requestId: crypto.randomUUID() }); } catch { blocked = true; }
+    if (outcome === "reject") await command({ action: "reject", planId: plan.id });
+    else {
+      await command({ action: "start", planId: plan.id });
+      await command({ action: "outcome", planId: plan.id, result: outcome, helpfulness: 6, intensity: 3 });
+    }
+    const reopened = await command({ action: "open", sessionId: crypto.randomUUID() });
+    cases.push({ outcome, stop: JSON.parse(plan.skill_json).id === "stop", noAttemptOnPrepare: !plan.attempt_id,
+      ownSituation: prepared.messages.some(message => message.text === payload.text),
+      duplicateSafe: duplicate.plans.length === 1 && duplicate.plans[0].id === plan.id,
+      blocked, saved: reopened.plans[0].result === (outcome === "reject" ? "failed" : outcome),
+      attempted: Boolean(reopened.plans[0].attempt_id) === (outcome !== "reject"),
+      resolved: reopened.openLoops.length === 0,
+      rejectionDistinct: outcome !== "reject" || reopened.pendingFollowUp?.kind === "rejection" });
+  }
+  const suffix = crypto.randomUUID();
+  const user = { userId: `quick-safety-${suffix}`, displayName: "Safety Test", email: `${suffix}@example.invalid`, fullName: null };
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId: crypto.randomUUID(), ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "marsha", text: "Хочу делать паузу перед ответом", consent: true });
+  const unsafe = await command({ action: "quickStop", text: "Хочу сделать паузу перед ответом", intensity: 4, risk: "unknown", urge: "attack" });
+  return { cases, safetyBlocked: Boolean(unsafe.profile?.safety_flag) && unsafe.plans.length === 0 };
+}
+
 async function runSimpleAnalysisCycle(db: D1Database) {
   const suffix = crypto.randomUUID();
   const user = {
@@ -1493,6 +1530,9 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/relationship-cycle") {
       return Response.json(await runRelationshipCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/quick-stop-cycle") {
+      return Response.json(await runQuickStopCycle());
     }
     if (request.method === "POST" && url.pathname === "/simple-analysis-cycle") {
       return Response.json(await runSimpleAnalysisCycle(env.DB));

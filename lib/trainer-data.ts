@@ -176,7 +176,7 @@ async function createRecommendedPlan(input: {
 }
 
 const bodySchema = z.object({
-  action: z.enum(["onboard", "settings", "open", "message", "situation", "confirmMemory", "dismissMemory", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain"]),
+  action: z.enum(["onboard", "settings", "open", "message", "situation", "confirmMemory", "dismissMemory", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain", "quickStop"]),
   requestId: z.string().uuid(), sessionId: z.string().uuid(),
   name: z.string().trim().min(1).max(60).optional(), trainerId: z.enum(["marsha", "beck", "skinny"]).optional(),
   interactionMode: z.enum(["support", "explore", "direct"]).optional(), text: z.string().trim().max(1200).optional(), consent: z.boolean().optional(),
@@ -245,6 +245,27 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
       const reply = await applyBehavioralMemoryDraft(analysis, pattern);
       await message(profile, "assistant", reply, `${key}:reply`);
       await event(profile, body.sessionId, "behavioral_memory_confirmed", analysis.id);
+    }
+    if (body.action === "quickStop") {
+      if (!body.text || body.text.length < 3 || body.intensity === undefined || !body.risk) throw new Error("Укажите свою ситуацию, интенсивность и безопасность.");
+      const current = await trainerState(user);
+      if (current.plans.some(plan => !plan.result) || current.pendingFollowUp || current.pendingSituationAnalysis) throw new Error("Сначала вернитесь к текущей практике или разбору.");
+      await message(profile, "user", body.text, `${key}:user`);
+      await event(profile, body.sessionId, "message_sent", key);
+      await engage(profile, body.sessionId);
+      if (profile.safety_flag || requiresSafetyRoute(body.text, body.risk)) {
+        await db.prepare("UPDATE trainer_profiles SET safety_flag=1 WHERE user_id=?").bind(user.userId).run();
+        await message(profile, "assistant", safetyMessage, `${key}:reply`);
+        await event(profile, body.sessionId, "safety_flow_used", key);
+      } else {
+        await event(profile, body.sessionId, "distress_flow_started", key);
+        await event(profile, body.sessionId, "situation_submitted", key);
+        // User chooses a pause; the existing engine may resize or replace STOP
+        // based on actual past outcomes. No attempt exists until explicit start.
+        await createRecommendedPlan({ user, profile, sessionId: body.sessionId, key,
+          text: body.text, mode: "distress", kind: "emotion", signal: "emotion",
+          urge: body.urge ?? "withdraw", intensity: body.intensity });
+      }
     }
     if (body.action === "message" || body.action === "situation") {
       if (!body.text || body.text.length < 3) throw new Error("Расскажите чуть подробнее.");

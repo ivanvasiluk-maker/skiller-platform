@@ -527,6 +527,15 @@ try {
     },
   });
 
+  const quickStop = await runEndpoint(baseUrl, "quick-stop-cycle");
+  assert.equal(quickStop.safetyBlocked, true);
+  assert.equal(quickStop.cases.length, 4);
+  for (const item of quickStop.cases) {
+    for (const key of ["stop", "noAttemptOnPrepare", "ownSituation", "duplicateSafe", "blocked", "saved", "attempted", "resolved", "rejectionDistinct"]) {
+      assert.equal(item[key], true, `Quick STOP ${item.outcome}: ${key}`);
+    }
+  }
+
   const simpleAnalysis = await runEndpoint(baseUrl, "simple-analysis-cycle");
   assert.deepEqual(simpleAnalysis, {
     returnCycle: {

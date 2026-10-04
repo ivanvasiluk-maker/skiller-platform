@@ -244,6 +244,11 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   return <div className="trainer-shell" style={{ "--trainer-color": trainer.color, "--trainer-bg": trainer.background } as React.CSSProperties}>
     <QuickStop
       disabled={busy}
+      onPrepare={profile && !pending && !analysisPending && !profile.safety_flag ? async input => {
+        const result = await command({ action: "quickStop", ...input });
+        if (!result) return false;
+        setMode("distress"); setScreen("conversation"); return true;
+      } : undefined}
       practiceLabel={pending ? "Вернуться к своей практике" : "Разобрать свою ситуацию с тренером"}
       onPractice={profile ? () => {
         // A quick reference never creates an attempt or replaces an open plan.
