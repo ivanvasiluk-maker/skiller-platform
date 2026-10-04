@@ -539,6 +539,9 @@ try {
     }
   }
 
+  const historyCycle = await runEndpoint(baseUrl, "history-cycle");
+  for (const [key, value] of Object.entries(historyCycle)) assert.equal(value, true, `History: ${key}`);
+
   const pauseCycle = await runEndpoint(baseUrl, "pause-cycle");
   for (const [key, value] of Object.entries(pauseCycle)) assert.equal(value, true, `Pause: ${key}`);
 

@@ -22,7 +22,7 @@ import {
 import { requiresSafetyRoute, safetyMessage } from "../lib/trainers";
 import { produceFreeTalkReply } from "../lib/free-talk";
 import { buildFreeTalkFallback, getCharacterBible } from "../lib/character-bible";
-import { trainerCommand } from "../lib/trainer-data";
+import { trainerCommand, trainerState, trainerHistory } from "../lib/trainer-data";
 import { buildConversationContext, renderConversationContext } from "../lib/conversation-orchestrator";
 import { runSheetsExport } from "../lib/sheets-exporter";
 import { createInMemorySheets } from "../lib/in-memory-sheets";
@@ -1251,6 +1251,21 @@ async function runQuickStopCycle() {
   return { cases, safetyBlocked: Boolean(unsafe.profile?.safety_flag) && unsafe.plans.length === 0 };
 }
 
+async function runHistoryCycle(db: D1Database) {
+  const id = crypto.randomUUID();
+  const user = { userId: `history-${id}`, displayName: "History", email: `${id}@example.invalid`, fullName: null };
+  await trainerCommand(user, { action: "onboard", name: "Тест", trainerId: "beck", text: "История", consent: true, requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  const ids = Array.from({ length: 125 }, () => crypto.randomUUID());
+  await db.batch(ids.map((messageId, index) => db.prepare("INSERT INTO trainer_messages (id,user_id,role,text,trainer_id,created_at) VALUES (?,?,?,?,?,?)").bind(messageId,user.userId,"user",`Message ${index}`,"beck","2026-10-04T10:00:00.000Z")));
+  const current = await trainerState(user);
+  const earlier = await trainerHistory(user,current.messages[0].id);
+  const oldest = await trainerHistory(user,earlier.messages[0].id);
+  const all = [...oldest.messages,...earlier.messages,...current.messages];
+  let foreignCursorBlocked = false;
+  try { await trainerHistory({ ...user, userId: `another-${id}` },ids[0]); } catch { foreignCursorBlocked = true; }
+  return { currentBounded: current.messages.length === 60 && current.hasEarlierMessages === true, pageBounded: earlier.messages.length === 60 && earlier.hasEarlierMessages === true, reachesStart: oldest.messages.length === 6 && !oldest.hasEarlierMessages, noDuplicates: new Set(all.map(message => message.id)).size === 126, tiedTimesInOrder: all.slice(1).every((message,index) => message.id === ids[index]), foreignCursorBlocked };
+}
+
 async function runPauseCycle(db: D1Database) {
   const id = crypto.randomUUID();
   const user = { userId: `pause-${id}`, displayName: "Pause", email: `${id}@example.invalid`, fullName: null };
@@ -1629,6 +1644,7 @@ const worker: ExportedHandler<Env> = {
     if (request.method === "POST" && url.pathname === "/quick-stop-cycle") {
       return Response.json(await runQuickStopCycle());
     }
+    if (request.method === "POST" && url.pathname === "/history-cycle") return Response.json(await runHistoryCycle(env.DB));
     if (request.method === "POST" && url.pathname === "/pause-cycle") return Response.json(await runPauseCycle(env.DB));
     if (request.method === "POST" && url.pathname === "/new-situation-cycle") return Response.json(await runNewSituationCycle());
     if (request.method === "POST" && url.pathname === "/simple-analysis-cycle") {

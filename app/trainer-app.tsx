@@ -9,7 +9,7 @@ import { PracticeDirection } from "./practice-direction";
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, ArrowLeft, Check, MessageCircle, Mic, MicOff, Play, Settings2, Sparkles, X } from "lucide-react";
 import { trainers, interactionModes, type TrainerId, type EntryMode } from "@/lib/trainers";
-import type { TrainerState, TrainerPlan } from "@/lib/trainer-data";
+import type { TrainerState, TrainerPlan, TrainerMessage } from "@/lib/trainer-data";
 import { explainDecisionReason } from "@/lib/trainer-continuity";
 import { meaningfulVoiceTranscript } from "@/lib/voice-transcript";
 import type { SkillView } from "@/lib/skiller-data";
@@ -44,6 +44,10 @@ const trainerIntroductions: Record<TrainerId, { label: string; quote: string; me
 };
 export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   const [state, setState] = useState(initialState);
+  const [olderMessages, setOlderMessages] = useState<TrainerMessage[]>([]);
+  const [visibleMessageCount, setVisibleMessageCount] = useState(8);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyHasMore, setHistoryHasMore] = useState<boolean | null>(null);
   const [screen, setScreen] = useState<"home" | "conversation" | "trainers" | "journal" | "recap">("home");
   const [mode, setMode] = useState<EntryMode>("stuck");
   const [choosingNewSituation, setChoosingNewSituation] = useState(false);
@@ -120,6 +124,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
       const result = await response.json() as TrainerState & { error?: string };
       if (!response.ok) throw new Error(result.error || "Не удалось сохранить");
       if (result.messages.at(-1)?.id !== state.messages.at(-1)?.id) setText("");
+      setOlderMessages(previous => [...previous, ...state.messages.filter(message => !result.messages.some(current => current.id === message.id) && !previous.some(older => older.id === message.id))]);
       setState(result); return result;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось сохранить. Попробуйте обновить данные.");
@@ -142,7 +147,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   async function refresh() {
-    try { const response = await fetch("/api/trainer", { cache: "no-store" }); if (!response.ok) throw new Error(); setState(await response.json()); setError(""); }
+    try { const response = await fetch("/api/trainer", { cache: "no-store" }); if (!response.ok) throw new Error(); const result = await response.json() as TrainerState; setOlderMessages(previous => [...previous, ...state.messages.filter(message => !result.messages.some(current => current.id === message.id) && !previous.some(older => older.id === message.id))]); setState(result); setError(""); }
     catch { setError("Сервер недоступен. Попробуйте ещё раз позже."); }
   }
   function enter(value: EntryMode, depth: "simple" | "complex" = "simple") { setMode(value); setKind(value === "distress" ? "emotion" : "stuck"); setRisk("unknown"); setAnalysisDepth(depth); setScreen("conversation"); }
@@ -157,6 +162,36 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
     setText(""); setChoosingNewSituation(false);
     enter("stuck");
     requestAnimationFrame(() => composerRef.current?.focus());
+  }
+  const combinedMessages = [...olderMessages.filter(message => !state.messages.some(current => current.id === message.id)), ...state.messages];
+  async function showEarlierMessages() {
+    if (historyBusy) return;
+    const node = messagesRef.current;
+    const anchor = node?.querySelector<HTMLElement>("[data-message-id]");
+    const oldTop = anchor?.getBoundingClientRect().top;
+    const preservePosition = () => requestAnimationFrame(() => {
+      if (!anchor || oldTop === undefined) return;
+      const difference = anchor.getBoundingClientRect().top - oldTop;
+      if (node && node.scrollHeight > node.clientHeight) node.scrollTop += difference;
+      else window.scrollBy(0, difference);
+    });
+    if (visibleMessageCount < combinedMessages.length) {
+      setVisibleMessageCount(count => Math.min(count + 10, combinedMessages.length));
+      preservePosition(); return;
+    }
+    const before = combinedMessages[0]?.id;
+    if (!before) return;
+    setHistoryBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/trainer?before=${encodeURIComponent(before)}`, { cache: "no-store" });
+      if (!response.ok) throw new Error("Не удалось загрузить историю. Попробуйте ещё раз.");
+      const page = await response.json() as { messages: TrainerMessage[]; hasEarlierMessages: boolean };
+      setOlderMessages(previous => [...page.messages, ...previous.filter(message => !page.messages.some(earlier => earlier.id === message.id))]);
+      setHistoryHasMore(page.hasEarlierMessages);
+      setVisibleMessageCount(count => count + page.messages.length);
+      preservePosition();
+    } catch (error) { setError(error instanceof Error ? error.message : "Не удалось загрузить историю."); }
+    finally { setHistoryBusy(false); }
   }
   async function send() {
     if (!draftReady || sendDisabled) return;
@@ -328,7 +363,8 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
         {screen === "conversation" && <><button className="trainer-link" onClick={() => setScreen("home")}><ArrowLeft size={16}/> К тренеру</button><div className="trainer-conversation-title"><div className="trainer-avatar small">{trainer.symbol}</div><div><h1>{mode === "talk" ? "Просто поговорим" : entries.find(e => e.id === mode)?.title}</h1><p>{trainer.name} · {interactionModes[profile.interaction_mode]} · <span className="trainer-online"><span className="trainer-online-dot" aria-hidden="true"/>на связи</span></p></div><span className="trainer-today">Сегодня · День {state.day}</span></div>
         {state.dueLoop && !state.plans.find(plan => plan.id === state.dueLoop?.plan_id)?.reported_result && <section className="trainer-followup"><span className="trainer-kicker">ПРОДОЛЖАЕМ ВЧЕРАШНЕЕ</span><p>Возвращаюсь к нашей договорённости: «{state.dueLoop.planned_action}». Как получилось по факту?</p><div className="trainer-quickreplies" role="group" aria-label="Быстрый ответ о результате">{[["done","Получилось"],["partial","Частично"],["not_done","Не получилось"],["skill_rejected","Шаг не подошёл"]].map(([r,label]) => <button key={r} type="button" className="trainer-chip" disabled={busy} onClick={() => void answerOutcome(r as string)}>{label}</button>)}<button type="button" className="trainer-chip" disabled={busy} onClick={writeAnotherOutcome}>Другой ответ</button></div></section>}
         {state.contextualMemory && <aside className="trainer-memory-card" aria-label="Контекст из прошлого разговора"><span className="trainer-kicker">ВОЗМОЖНО, ЭТО СВЯЗАНО</span><p>В похожем разборе Вы описывали: «{state.contextualMemory.thought || state.contextualMemory.urge || state.contextualMemory.action}».</p><small>{state.contextualMemory.occurrence_count > 1 ? `Это встречалось в ${state.contextualMemory.occurrence_count} подтверждённых разборах.` : "Это было в одном подтверждённом разборе."} Сейчас проверим заново — это гипотеза, а не вывод о Вас.</small><div className="trainer-memory-actions"><button type="button" className="trainer-chip" disabled={busy} onClick={() => void confirmContextualMemory()}>Да, похоже на прошлый случай</button><button type="button" className="trainer-memory-dismiss" disabled={busy} onClick={() => void dismissContextualMemory()}>Это сейчас не подходит</button></div></aside>}
-        <div className="trainer-messages" ref={messagesRef} aria-live="polite">{state.messages.slice(-8).map(m => <div key={m.id} className={`trainer-message ${m.role}`}><small>{m.role === "user" ? profile.name : trainers[m.trainer_id].name}</small><p>{m.text}</p></div>)}{busy && <div className="trainer-message assistant" aria-live="polite"><small>{trainer.name}</small><p className="trainer-typing" aria-label="Тренер печатает"><span/><span/><span/></p></div>}</div>
+        {(visibleMessageCount < combinedMessages.length || (historyHasMore ?? state.hasEarlierMessages)) && <button type="button" className="trainer-secondary" disabled={historyBusy} onClick={() => void showEarlierMessages()}>{historyBusy ? "Загружаем историю…" : "Показать более ранние сообщения"}</button>}
+        <div className="trainer-messages" ref={messagesRef} aria-live="polite">{combinedMessages.slice(-visibleMessageCount).map(m => <div data-message-id={m.id} key={m.id} className={`trainer-message ${m.role}`}><small>{m.role === "user" ? profile.name : trainers[m.trainer_id].name}</small><p>{m.text}</p></div>)}{busy && <div className="trainer-message assistant" aria-live="polite"><small>{trainer.name}</small><p className="trainer-typing" aria-label="Тренер печатает"><span/><span/><span/></p></div>}</div>
           {(state.pendingSituationAnalysis?.stage === "confirm" || state.pendingSituationAnalysis?.stage === "chain_confirm") && <div className="trainer-quickreplies" role="group" aria-label="Ответ на рабочую гипотезу"><button type="button" className="trainer-chip" disabled={busy} onClick={() => void answerHypothesis("Да, похоже")}>{state.pendingSituationAnalysis.stage === "chain_confirm" ? "Цепочка верна" : "Да, похоже"}</button><button type="button" className="trainer-chip" disabled={busy} onClick={() => void answerHypothesis("Нет")}>{state.pendingSituationAnalysis.stage === "chain_confirm" ? "Исправить ещё одно звено" : "Нет, хочу поправить"}</button></div>}
           {state.pendingSituationAnalysis?.stage === "chain_edit_choose" && <div className="trainer-quickreplies" role="group" aria-label="Выберите звено цепочки для исправления">{["Событие", "Мысль или смысл", "Эмоции и тело", "Импульс", "Действие", "Последствия"].map(label => <button key={label} type="button" className="trainer-chip" disabled={busy} onClick={() => void answerHypothesis(label)}>{label}</button>)}</div>}
           {state.pendingSituationAnalysis?.stage === "chain_choose" && <div className="trainer-quickreplies" role="group" aria-label="Выберите точку для тренировки">{["Мысль и интерпретация", "Тело и эмоция", "Импульс", "Конкретное действие"].map(label => <button key={label} type="button" className="trainer-chip" disabled={busy} onClick={() => void answerHypothesis(label)}>{label}</button>)}</div>}

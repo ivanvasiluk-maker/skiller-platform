@@ -19,7 +19,7 @@ export type TrainerProfile = { user_id: string; pseudonym: string; name: string;
 export type TrainerMessage = { id: string; role: "user" | "assistant"; text: string; trainer_id: TrainerId; created_at: string };
 export type TrainerPlan = { id: string; situation_id: string; skill_json: string; skill_title: string; entry_mode: string; intensity_before: number; intensity_after: number | null; attempt_id: string | null; result: "done" | "partial" | "failed" | "more" | null; completed_part?: string | null; stopping_point?: string | null; paused?: number | null; reported_result?: "done" | "partial" | "failed" | "more" | null; worsened?: number | null; helpfulness: number | null; decision_reason_code: OutcomeReasonCode; decision_version: string; created_at: string };
 export type ContextualMemory = Pick<BehavioralPattern, "id" | "thought" | "urge" | "action" | "intervention_point" | "occurrence_count">;
-export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity; openLoops: OpenLoop[]; dueLoop: OpenLoop | null; pendingFollowUp: ConversationFollowUp | null; pendingSituationAnalysis: SituationAnalysisSession | null; contextualMemory: ContextualMemory | null };
+export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; hasEarlierMessages?: boolean; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity; openLoops: OpenLoop[]; dueLoop: OpenLoop | null; pendingFollowUp: ConversationFollowUp | null; pendingSituationAnalysis: SituationAnalysisSession | null; contextualMemory: ContextualMemory | null };
 
 const statements = [
   "CREATE TABLE IF NOT EXISTS trainer_performance_details (plan_id TEXT PRIMARY KEY,user_id TEXT NOT NULL,completed_part TEXT NOT NULL DEFAULT '',stopping_point TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL)",
@@ -56,6 +56,16 @@ export async function ensureTrainerStorage() {
 async function profileFor(userId: string) {
   return getRawDb().prepare("SELECT * FROM trainer_profiles WHERE user_id=?").bind(userId).first<TrainerProfile>();
 }
+export async function trainerHistory(user: ChatGPTUser, beforeId: string) {
+  if (!beforeId || beforeId.length > 160) throw new Error("Неверная точка истории.");
+  await ensureTrainerStorage();
+  const db = getRawDb();
+  const cursor = await db.prepare("SELECT rowid AS message_order FROM trainer_messages WHERE id=? AND user_id=?").bind(beforeId,user.userId).first<{ message_order: number }>();
+  if (!cursor) throw new Error("Точка истории не найдена.");
+  const rows = await db.prepare("SELECT id,role,text,trainer_id,created_at FROM trainer_messages WHERE user_id=? AND rowid<? ORDER BY rowid DESC LIMIT 61").bind(user.userId,cursor.message_order).all<TrainerMessage>();
+  return { messages: rows.results.slice(0,60).reverse(), hasEarlierMessages: rows.results.length > 60 };
+}
+
 export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
   await ensureUser(user);
   await ensureTrainerStorage();
@@ -65,7 +75,7 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
   const profile = await profileFor(user.userId);
   if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [], continuity: buildTrainerContinuity([]), openLoops: [], dueLoop: null, pendingFollowUp: null, pendingSituationAnalysis: null, contextualMemory: null };
   const [messages, plans, days, loops, due, pendingFollowUp, pendingPreAnalysis] = await Promise.all([
-    db.prepare("SELECT * FROM (SELECT id,role,text,trainer_id,created_at FROM trainer_messages WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 60) ORDER BY created_at,id").bind(user.userId).all<TrainerMessage>(),
+    db.prepare("SELECT id,role,text,trainer_id,created_at FROM (SELECT rowid AS message_order,id,role,text,trainer_id,created_at FROM trainer_messages WHERE user_id=? ORDER BY rowid DESC LIMIT 61) ORDER BY message_order").bind(user.userId).all<TrainerMessage>(),
     db.prepare("SELECT p.*,r.reported_result,r.worsened,x.paused,d.completed_part,d.stopping_point FROM trainer_plans p LEFT JOIN trainer_outcome_reports r ON r.plan_id=p.id AND r.user_id=p.user_id LEFT JOIN trainer_plan_pauses x ON x.plan_id=p.id AND x.user_id=p.user_id LEFT JOIN trainer_performance_details d ON d.plan_id=p.id AND d.user_id=p.user_id WHERE p.user_id=? ORDER BY p.created_at DESC,p.rowid DESC LIMIT 100").bind(user.userId).all<TrainerPlan>(),
     db.prepare("SELECT DISTINCT day_index FROM pilot_events WHERE user_id=? AND event_name='engaged_return' ORDER BY day_index").bind(profile.pseudonym).all<{ day_index: number }>(),
     db.prepare("SELECT * FROM open_loops WHERE user_id=? AND status IN ('active','answered','paused') ORDER BY priority DESC, follow_up_due ASC").bind(user.userId).all<OpenLoop>(),
@@ -83,7 +93,8 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
   return {
     profile,
     day,
-    messages: messages.results,
+    messages: messages.results.slice(-60),
+    hasEarlierMessages: messages.results.length > 60,
     plans: plans.results,
     recap: buildRecap(plans.results, engagedDays, profile.created_at),
     engagedDays,

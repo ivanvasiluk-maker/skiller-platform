@@ -439,3 +439,8 @@ PlanCard перестаёт дублировать concreteAction. Описан�
 ## 04.10.2026 — N5b: уточнения в разговоре и итоге
 
 RecapAttempt/ContinuityPlan получили optional completed_part/stopping_point. Факты recap цитируют только partial-уточнения без выдуманной пользы. ConversationContext получает bounded partialPerformance с явной пользой/ухудшением; paused исключены. Render помечает JSON как слова пользователя, требует проверки актуальности и запрещает вывод причин/успеха из сделанной части. Детерминированный ответ при сохранённом performance включает собственные слова и переводит к пользе без повторения упражнения. 13 recap-тестов PASS; /pause-cycle дополнен context/reply/recap-проверками после нового sessionId. Typecheck, адресный ESLint, D1 integration, build, diff check PASS. Интеграция с отключённым AI; живое качество модели не проверено, browser/phone/production не затронуты.
+
+
+## 04.10.2026 — N7a: доступ к ранним сообщениям
+
+trainerHistory + GET before: owned cursor, 60 rows/page, no-store, insert order via rowid. TrainerState получает hasEarlierMessages из выборки 61, отдаёт последние 60. UI раскрывает 10 уже доступных сообщений, затем загружает страницы; дедупликация при overlap, сохранение выпавших из свежего окна сообщений, отдельное historyBusy. DOM-якорь удерживает место при раскрытии; текущий вопрос/план/черновик не меняются, история не расширяет AI-вход. D1 /history-cycle: 126 messages, tied times, complete order, distinct IDs, end-of-history, foreign cursor blocked. Typecheck/адресный ESLint/D1 integration/build/diff check PASS. После UI-доработки повторены типы/lint/build; серверный код после integration не менялся. Browser/mobile scroll и live AI не проверены; production не обновлён.
