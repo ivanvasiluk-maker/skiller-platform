@@ -17,6 +17,13 @@ export function communicationInstructions(profile: CommunicationPreferences): st
 
 
 const systemPrompts = {
+  practiceFirst: ["Сейчас не будем решать всё целиком. Сделайте один первый шаг:", "Сейчас не будем решать всё целиком. Сделай один первый шаг:"],
+  practiceCard: ["Выполните короткое действие из карточки", "Выполни короткое действие из карточки"],
+  reportAttempt: ["После реальной попытки напишите:", "После реальной попытки напиши:"],
+  completedPrefix: ["Вы сообщили, что удалось:", "По твоим словам, удалось:"],
+  cardTask: ["Это справка к навыку. Сейчас Ваше задание — договорённость выше; остальные шаги выполнять не обязательно.", "Это справка к навыку. Сейчас твоё задание — договорённость выше; остальные шаги выполнять не обязательно."],
+  cardStopped: ["Где Вы остановились?", "На каком моменте получилось остановиться?"],
+  cardResult: ["Не нужно продолжать автоматически. Сначала отметьте результат этого действия.", "Не нужно продолжать автоматически. Сначала отметь результат этого действия."],
   hypothesisCorrection: ["Если это неточно, поправьте одним предложением.", "Если это неточно, поправь одним предложением."],
   correctionLabel: ["Ваше уточнение:", "Твоё уточнение:"],
   hypothesisConfirmation: ["Это похоже на Ваш опыт?", "Это похоже на твой опыт?"],
@@ -44,4 +51,11 @@ const systemPrompts = {
 /** Explicit variants only: never rewrite user quotes, model replies or saved history. */
 export function systemPrompt(profile: CommunicationPreferences, key: keyof typeof systemPrompts): string {
   return systemPrompts[key][profile.address_form === "informal" ? 1 : 0];
+}
+
+
+export function attemptReplyExamples(profile: CommunicationPreferences): string {
+  if (profile.grammatical_gender === "feminine") return "«сделала», «частично» или «не сделала»";
+  if (profile.grammatical_gender === "masculine") return "«сделал», «частично» или «не сделал»";
+  return "«получилось», «частично» или «не получилось»";
 }

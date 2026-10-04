@@ -1,4 +1,5 @@
 "use client";
+import { systemPrompt, type CommunicationPreferences } from "@/lib/communication-preferences";
 import Link from "next/link";
 import { QuickStop } from "./quick-stop";
 import { StopExample } from "./stop-example";
@@ -369,7 +370,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
           {state.pendingSituationAnalysis?.stage === "chain_edit_choose" && <div className="trainer-quickreplies" role="group" aria-label="Выберите звено цепочки для исправления">{["Событие", "Мысль или смысл", "Эмоции и тело", "Импульс", "Действие", "Последствия"].map(label => <button key={label} type="button" className="trainer-chip" disabled={busy} onClick={() => void answerHypothesis(label)}>{label}</button>)}</div>}
           {state.pendingSituationAnalysis?.stage === "chain_choose" && <div className="trainer-quickreplies" role="group" aria-label="Выберите точку для тренировки">{["Мысль и интерпретация", "Тело и эмоция", "Импульс", "Конкретное действие"].map(label => <button key={label} type="button" className="trainer-chip" disabled={busy} onClick={() => void answerHypothesis(label)}>{label}</button>)}</div>}
           {Boolean(profile.safety_flag) ? <section className="trainer-safety"><h2>Сначала — безопасность</h2><p>Практика приостановлена. Если непосредственная опасность миновала, можно снова оценить состояние.</p><button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "safeAgain", risk: "no" })}>Сейчас нет риска причинить вред</button></section> : <>
-          {pending && <PlanCard key={pending.id} plan={pending} plannedAction={state.openLoops.find(loop => loop.plan_id === pending.id)?.planned_action} busy={busy} command={command} onPause={async () => { if (await command({ action: "pause", planId: pending.id })) setScreen("home"); }}/>}
+          {pending && <PlanCard preferences={profile} key={pending.id} plan={pending} plannedAction={state.openLoops.find(loop => loop.plan_id === pending.id)?.planned_action} busy={busy} command={command} onPause={async () => { if (await command({ action: "pause", planId: pending.id })) setScreen("home"); }}/>}
           {!analysisPending && !pending && latest?.result === "failed" && <section className="trainer-panel"><h2>Изменим размер шага?</h2><p>{trainer.failure}</p><div className="trainer-actions"><button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "resize", planId: latest.id })}>Упростить до первого шага</button><button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "replace", planId: latest.id })}>Попробовать другой навык</button></div></section>}
           <form className="trainer-composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="trainer-label" htmlFor="message">{analysisPending ? "Ваш ответ" : mode === "talk" ? "Что у Вас на уме?" : "Один конкретный эпизод"}</label><textarea ref={composerRef} id="message" rows={3} className="trainer-input" maxLength={1200} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} placeholder={analysisPending ? "Ответьте своими словами или продиктуйте…" : "Можно написать или продиктовать сообщение…"}/>
           {text.trim() && <p className="trainer-draft-note">{draftStorageUnavailable ? "Сохранение черновика на устройстве недоступно. Скопируйте текст перед закрытием." : "Черновик хранится на этом устройстве. Восстановить его можно в течение 7 дней; он ещё не отправлен."} <button type="button" className="trainer-chip" disabled={busy || recording} onClick={() => setText("")}>Удалить черновик</button></p>}
@@ -383,7 +384,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   </div>;
 }
 function Score({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) { return <label className="trainer-score"><span>{label} <strong>{value}/10</strong></span><input type="range" min={0} max={10} value={value} onChange={e => onChange(Number(e.target.value))}/></label>; }
-function PlanCard({ plan, plannedAction, busy, command, onPause }: { plan: TrainerPlan; plannedAction?: string; busy: boolean; onPause: () => Promise<void>; command: (p: Record<string, unknown>) => Promise<TrainerState | null> }) {
+function PlanCard({ plan, plannedAction, busy, command, onPause, preferences }: { preferences: CommunicationPreferences; plan: TrainerPlan; plannedAction?: string; busy: boolean; onPause: () => Promise<void>; command: (p: Record<string, unknown>) => Promise<TrainerState | null> }) {
   const skill = JSON.parse(plan.skill_json) as SkillView;
   const durationLabel = `${Math.floor(skill.durationSeconds / 60)}:${String(skill.durationSeconds % 60).padStart(2, "0")}`;
   const displaySteps = skill.steps.map(step => skill.id === "distract-delay" && step.copy === "Вернитесь к задаче на пять минут, затем решите заново."
@@ -408,14 +409,14 @@ function PlanCard({ plan, plannedAction, busy, command, onPause }: { plan: Train
         <p>{skill.description}</p>
         <p>{explainDecisionReason(plan.decision_reason_code)}</p>
       </details>
-      {concreteAction && <p>Не нужно продолжать автоматически. Сначала отметьте результат этого действия.</p>}
+      {concreteAction && <p>{systemPrompt(preferences, "cardResult")}</p>}
       {skill.id === "micro-start" && <MicroStartExample plannedAction={concreteAction} />}
       {skill.id === "stop" && <StopExample plannedAction={concreteAction} />}
       {skill.id === "grounding-543" && <GroundingExample plannedAction={concreteAction} />}
       <SkillExample skillId={skill.id} plannedAction={concreteAction} />
       {concreteAction ? <details className="micro-start-example">
         <summary>Показать шаги навыка</summary>
-        <p>Это справка к навыку. Сейчас Ваше задание — договорённость выше; остальные шаги выполнять не обязательно.</p>
+        <p>{systemPrompt(preferences, "cardTask")}</p>
         <ol>{displaySteps.map(step => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
       </details> : <><span className="trainer-kicker">ШАГИ ПРАКТИКИ</span>
         <ol>{displaySteps.map(step => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
@@ -440,7 +441,7 @@ function PlanCard({ plan, plannedAction, busy, command, onPause }: { plan: Train
               <legend>Что получилось частично?</legend>
               <p>Можно уточнить своими словами или сразу перейти к пользе. Эти ответы не означают, что практика помогла.</p>
               <label className="trainer-label">Что удалось сделать?<textarea className="trainer-input" rows={2} maxLength={800} value={completedPart} onChange={event => { setCompletedPart(event.target.value); setDetailsSaved(false); }} /></label>
-              <label className="trainer-label">Где Вы остановились?<textarea className="trainer-input" rows={2} maxLength={800} value={stoppingPoint} onChange={event => { setStoppingPoint(event.target.value); setDetailsSaved(false); }} /></label>
+              <label className="trainer-label">{systemPrompt(preferences, "cardStopped")}<textarea className="trainer-input" rows={2} maxLength={800} value={stoppingPoint} onChange={event => { setStoppingPoint(event.target.value); setDetailsSaved(false); }} /></label>
               <button className="trainer-secondary" disabled={busy} onClick={async () => { if (await command({ action: "performanceDetails", planId: plan.id, completedPart, stoppingPoint })) setDetailsSaved(true); }}>Сохранить уточнение</button>
               {detailsSaved && <p role="status">Уточнение сохранено. Пользу оцениваем отдельно.</p>}
               {(completedPart !== (plan.completed_part ?? "") || stoppingPoint !== (plan.stopping_point ?? "")) && <p>Есть несохранённое уточнение. Сохраните его перед паузой или оценкой пользы, если хотите оставить эти слова в истории.</p>}

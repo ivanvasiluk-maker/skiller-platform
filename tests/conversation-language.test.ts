@@ -24,3 +24,13 @@ test("missing-link questions follow saved address independently of the user's wo
   assert.doesNotMatch(missingLinkQuestion("Вы сказали смотреть видео", { address_form: "informal" }), /Вы открыли/);
   assert.match(missingLinkQuestion("я отказалась", { address_form: "informal" }), /перед отказом/);
 });
+
+
+test("all offered execution replies route to their actual execution status", async () => {
+  const { classifyAttemptReport } = await import("../lib/conversation-language.ts");
+  const { attemptReplyExamples } = await import("../lib/communication-preferences.ts");
+  for (const grammatical_gender of ["neutral", "masculine", "feminine"] as const) {
+    const replies = [...attemptReplyExamples({ grammatical_gender }).matchAll(/«([^»]+)»/g)].map(match => match[1]);
+    assert.deepEqual(replies.map(classifyAttemptReport), ["done", "partial", "not_done"]);
+  }
+});

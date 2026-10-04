@@ -1,4 +1,4 @@
-import { systemPrompt, type CommunicationPreferences } from "@/lib/communication-preferences";
+import { attemptReplyExamples, systemPrompt, type CommunicationPreferences } from "@/lib/communication-preferences";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { getRawDb } from "@/db";
@@ -175,8 +175,8 @@ async function createRecommendedPlan(input: {
   await getRawDb().prepare("INSERT INTO trainer_plans (id,user_id,situation_id,skill_json,skill_title,entry_mode,intensity_before,decision_reason_code,decision_version,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
     .bind(input.key, input.user.userId, recommendation.situationId, JSON.stringify(skill), skill.title, input.mode, input.intensity, recommendation.reasonCode ?? "first_try", recommendation.decisionVersion ?? "outcome-policy-v2", new Date().toISOString()).run();
   const reply = concreteAction
-    ? `Сейчас не будем решать всё целиком. Сделайте один первый шаг: «${concreteAction}». После реальной попытки напишите: «сделал», «частично» или «не сделал».`
-    : `Сейчас — только один следующий шаг: практика «${skill.title}». Выполните короткое действие из карточки и после реальной попытки напишите: «сделал», «частично» или «не сделал».`;
+    ? `${systemPrompt(input.profile, "practiceFirst")} «${concreteAction}». ${systemPrompt(input.profile, "reportAttempt")} ${attemptReplyExamples(input.profile)}.`
+    : `Сейчас — только один следующий шаг: практика «${skill.title}». ${systemPrompt(input.profile, "practiceCard")}. ${systemPrompt(input.profile, "reportAttempt")} ${attemptReplyExamples(input.profile)}.`;
   await message(input.profile, "assistant", reply, `${input.key}:reply`);
   await event(input.profile, input.sessionId, "skill_recommended", input.key, { skill_id: skill.id, decision_reason_code: recommendation.reasonCode ?? "first_try", decision_version: recommendation.decisionVersion ?? "outcome-policy-v2" });
   if (recommendation.analysis) await event(input.profile, input.sessionId, "mechanism_generated", input.key);
@@ -462,7 +462,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           situation: { mode: body.mode ?? "talk" },
         });
         const replyText = pendingPlan?.reported_result
-          ? `${pendingPlan.reported_result === "partial" && pendingPlan.completed_part ? `Вы сообщили, что удалось: «${pendingPlan.completed_part}». ` : ""}${pendingPlan.reported_result === "partial" && pendingPlan.stopping_point ? `Остановились: «${pendingPlan.stopping_point}». ` : ""}Ответ о выполнении уже сохранён. В карточке можно отдельно оценить пользу или отметить, что стало хуже. Повторять практику для этого не нужно.`
+          ? `${pendingPlan.reported_result === "partial" && pendingPlan.completed_part ? `${systemPrompt(profile, "completedPrefix")} «${pendingPlan.completed_part}». ` : ""}${pendingPlan.reported_result === "partial" && pendingPlan.stopping_point ? `Остановились: «${pendingPlan.stopping_point}». ` : ""}Ответ о выполнении уже сохранён. В карточке можно отдельно оценить пользу или отметить, что стало хуже. Повторять практику для этого не нужно.`
           : due
           ? `Возвращаюсь к нашей договорённости: «${due.planned_action}». Как прошло — получилось, частично или не получилось?`
           : await freeTalk(profile, state.messages.slice(-8), buildOrchestratorInstructions(ctx));
