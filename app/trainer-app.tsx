@@ -2,6 +2,7 @@
 import Link from "next/link";
 import { QuickStop } from "./quick-stop";
 import { StopExample } from "./stop-example";
+import { GroundingExample } from "./grounding-example";
 import { MicroStartExample } from "./micro-start-example";
 import { PracticeDirection } from "./practice-direction";
 import { useEffect, useRef, useState } from "react";
@@ -308,6 +309,7 @@ function PlanCard({ plan, plannedAction, busy, command }: { plan: TrainerPlan; p
       {concreteAction && <ol><li><strong>{concreteAction}</strong><p>Не нужно продолжать автоматически. Сначала зафиксируйте результат этого действия.</p></li></ol>}
       {skill.id === "micro-start" && <MicroStartExample plannedAction={concreteAction} />}
       {skill.id === "stop" && <StopExample plannedAction={concreteAction} />}
+      {skill.id === "grounding-543" && <GroundingExample plannedAction={concreteAction} />}
       <span className="trainer-kicker">ШАГИ ПРАКТИКИ</span>
       <ol>{skill.steps.map((step) => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
       {!plan.attempt_id ? (
