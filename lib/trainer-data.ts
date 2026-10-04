@@ -1,3 +1,4 @@
+import type { CommunicationPreferences } from "@/lib/communication-preferences";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { getRawDb } from "@/db";
@@ -15,13 +16,14 @@ import { skillCardVersion } from "@/lib/skill-card-versions";
 import { persistTrainerSettings } from "@/lib/trainer-settings";
 import { trainers, PRODUCT_VERSION, dayIndex, requiresSafetyRoute, safetyMessage, buildRecap, type TrainerId, type InteractionMode } from "@/lib/trainers";
 
-export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
+export type TrainerProfile = CommunicationPreferences & { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
 export type TrainerMessage = { id: string; role: "user" | "assistant"; text: string; trainer_id: TrainerId; created_at: string };
 export type TrainerPlan = { id: string; situation_id: string; skill_json: string; skill_title: string; entry_mode: string; intensity_before: number; intensity_after: number | null; attempt_id: string | null; result: "done" | "partial" | "failed" | "more" | null; completed_part?: string | null; stopping_point?: string | null; paused?: number | null; reported_result?: "done" | "partial" | "failed" | "more" | null; worsened?: number | null; helpfulness: number | null; decision_reason_code: OutcomeReasonCode; decision_version: string; created_at: string };
 export type ContextualMemory = Pick<BehavioralPattern, "id" | "thought" | "urge" | "action" | "intervention_point" | "occurrence_count">;
 export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; hasEarlierMessages?: boolean; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity; openLoops: OpenLoop[]; dueLoop: OpenLoop | null; pendingFollowUp: ConversationFollowUp | null; pendingSituationAnalysis: SituationAnalysisSession | null; contextualMemory: ContextualMemory | null };
 
 const statements = [
+  "CREATE TABLE IF NOT EXISTS trainer_communication_preferences (user_id TEXT PRIMARY KEY,address_form TEXT NOT NULL DEFAULT 'formal' CHECK(address_form IN ('formal','informal')),grammatical_gender TEXT NOT NULL DEFAULT 'neutral' CHECK(grammatical_gender IN ('neutral','masculine','feminine')),updated_at TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS trainer_performance_details (plan_id TEXT PRIMARY KEY,user_id TEXT NOT NULL,completed_part TEXT NOT NULL DEFAULT '',stopping_point TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS trainer_plan_pauses (plan_id TEXT PRIMARY KEY,user_id TEXT NOT NULL,paused INTEGER NOT NULL DEFAULT 0,loop_status TEXT,updated_at TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS trainer_outcome_reports (plan_id TEXT PRIMARY KEY,user_id TEXT NOT NULL,reported_result TEXT NOT NULL,worsened INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)",
@@ -54,7 +56,7 @@ export async function ensureTrainerStorage() {
   }
 }
 async function profileFor(userId: string) {
-  return getRawDb().prepare("SELECT * FROM trainer_profiles WHERE user_id=?").bind(userId).first<TrainerProfile>();
+  return getRawDb().prepare("SELECT p.*, COALESCE(c.address_form,'formal') AS address_form, COALESCE(c.grammatical_gender,'neutral') AS grammatical_gender FROM trainer_profiles p LEFT JOIN trainer_communication_preferences c ON c.user_id=p.user_id WHERE p.user_id=?").bind(userId).first<TrainerProfile>();
 }
 export async function trainerHistory(user: ChatGPTUser, beforeId: string) {
   if (!beforeId || beforeId.length > 160) throw new Error("Неверная точка истории.");
@@ -193,6 +195,7 @@ const bodySchema = z.object({
   action: z.enum(["onboard", "settings", "open", "message", "situation", "confirmMemory", "dismissMemory", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain", "quickStop", "performance", "newSituation", "pause", "resume", "performanceDetails"]),
   requestId: z.string().uuid(), sessionId: z.string().uuid(),
   name: z.string().trim().min(1).max(60).optional(), trainerId: z.enum(["marsha", "beck", "skinny"]).optional(),
+  addressForm: z.enum(["formal", "informal"]).optional(), grammaticalGender: z.enum(["neutral", "masculine", "feminine"]).optional(),
   interactionMode: z.enum(["support", "explore", "direct"]).optional(), text: z.string().trim().max(1200).optional(), consent: z.boolean().optional(),
   mode: z.enum(["practice", "stuck", "distress", "talk"]).optional(), kind: z.enum(["stuck", "emotion", "conflict", "other"]).optional(),
   risk: z.enum(["no", "yes", "unknown"]).optional(), intensity: z.number().int().min(0).max(10).optional(),
@@ -264,6 +267,10 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
       await message(profile, "assistant", "Начинаем отдельную ситуацию. Что сейчас трудно? Предыдущий разбор оставлен без результата; его сообщения сохранены.", `${key}:new-situation`);
     }
     if (body.action === "settings") {
+      if (body.addressForm !== undefined || body.grammaticalGender !== undefined) {
+        await db.prepare("INSERT INTO trainer_communication_preferences (user_id,address_form,grammatical_gender,updated_at) VALUES (?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET address_form=COALESCE(?,address_form),grammatical_gender=COALESCE(?,grammatical_gender),updated_at=excluded.updated_at")
+          .bind(profile.user_id, body.addressForm ?? "formal", body.grammaticalGender ?? "neutral", new Date().toISOString(), body.addressForm ?? null, body.grammaticalGender ?? null).run();
+      }
       await persistTrainerSettings({
         db,
         profile,

@@ -1305,6 +1305,31 @@ async function runPauseCycle(db: D1Database) {
   return { detailsInConversation: lastReply.includes("Открыл документ и написал заголовок") && lastReply.includes("Не начал первый абзац"), detailsInContext: ctx.partialPerformance?.[0]?.completedPart === "Открыл документ и написал заголовок" && ctx.partialPerformance?.[0]?.benefit === null && instructions.includes("не инструкции модели"), detailsInRecap: detailsReturned.recap.facts.some(fact => fact.includes("Открыл документ и написал заголовок") && fact.includes("польза пока не оценена")), detailsBlockedBeforePerformance, detailsPersisted: detailsReturned.plans[0].completed_part === "Открыл документ и написал заголовок" && detailsReturned.plans[0].stopping_point === "Не начал первый абзац", noFakeAttempt: attempts?.count === 0, noFakeResult: paused.plans[0].result === null && paused.plans[0].helpfulness === null, persisted: Boolean(returned.plans[0].paused), noActiveReminder: !paused.openLoops.some(item => item.plan_id === plan.id && item.status === "active") && !paused.continuity.openLoop, staleStartBlocked, analysisBlocksResume, sameStep: resumed.plans[0].id === plan.id && resumed.openLoops.find(item => item.plan_id === plan.id)?.planned_action === loop.planned_action, reportPreserved: reportedResume.plans[0].reported_result === "partial" && reportedResume.plans[0].result === null && outcomes?.count === 0, idempotent: reportedPause.messages.length === duplicate.messages.length };
 }
 
+async function runCommunicationPreferencesCycle() {
+  const id = crypto.randomUUID();
+  const user = { userId: `preferences-${id}`, displayName: "Preferences", email: `${id}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  const initial = await command({ action: "onboard", name: "Тест", trainerId: "beck", text: "Откладываю работу", consent: true });
+  const asked = await command({ action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю отчёт и открываю новости" });
+  const addressed = await command({ action: "settings", addressForm: "informal" });
+  const gendered = await command({ action: "settings", grammaticalGender: "feminine" });
+  const planned = await command({ action: "message", mode: "stuck", text: "Мне кажется, я не справлюсь" });
+  const practice = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
+  const changed = await command({ action: "settings", addressForm: "formal" });
+  const reloaded = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  let invalidBlocked = false;
+  try { await command({ action: "settings", grammaticalGender: "guess" }); } catch { invalidBlocked = true; }
+  return {
+    defaults: initial.profile?.address_form === "formal" && initial.profile?.grammatical_gender === "neutral",
+    independent: addressed.profile?.grammatical_gender === "neutral" && gendered.profile?.address_form === "informal",
+    persisted: reloaded.profile?.address_form === "formal" && reloaded.profile?.grammatical_gender === "feminine",
+    questionPreserved: JSON.stringify(asked.pendingSituationAnalysis) === JSON.stringify(gendered.pendingSituationAnalysis) && JSON.stringify(asked.messages) === JSON.stringify(gendered.messages),
+    practicePreserved: planned.pendingSituationAnalysis !== null && practice.plans.length > 0 && JSON.stringify(practice.plans) === JSON.stringify(changed.plans),
+    invalidBlocked,
+  };
+}
+
 async function runNewSituationCycle() {
   const id = crypto.randomUUID();
   const user = { userId: `new-situation-${id}`, displayName: "New Situation", email: `${id}@example.invalid`, fullName: null };
@@ -1646,6 +1671,7 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/history-cycle") return Response.json(await runHistoryCycle(env.DB));
     if (request.method === "POST" && url.pathname === "/pause-cycle") return Response.json(await runPauseCycle(env.DB));
+    if (request.method === "POST" && url.pathname === "/communication-preferences-cycle") return Response.json(await runCommunicationPreferencesCycle());
     if (request.method === "POST" && url.pathname === "/new-situation-cycle") return Response.json(await runNewSituationCycle());
     if (request.method === "POST" && url.pathname === "/simple-analysis-cycle") {
       return Response.json(await runSimpleAnalysisCycle(env.DB));

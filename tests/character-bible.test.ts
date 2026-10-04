@@ -124,3 +124,32 @@ test("free talk fallback is deterministic and bible-grounded", () => {
     assert.match(first, /действие\?$/);
   }
 });
+
+
+test("saved address and gender reach free talk even with orchestration instructions", async () => {
+  const { produceFreeTalkReply } = await import("../lib/free-talk.ts");
+  for (const address of ["formal", "informal"] as const) {
+    for (const gender of ["neutral", "masculine", "feminine"] as const) {
+      let instructions = "";
+      const reply = await produceFreeTalkReply({
+        profile: { trainer_id: "beck", interaction_mode: "support", address_form: address, grammatical_gender: gender },
+        messages: [], apiKey: "test-key", model: "test-model", instructionsOverride: "Контекст разговора",
+        fetchImpl: async (_url, init) => {
+          instructions = JSON.parse(String(init?.body)).instructions;
+          return Response.json({ output: [{ content: [{ type: "output_text", text: JSON.stringify({ reply: "Можно продолжить с текущего места. Что сейчас трудно?" }) }] }] });
+        },
+      });
+      assert.match(instructions, /Контекст разговора/);
+      assert.ok(instructions.includes(address === "formal" ? "«Вы»" : "«ты»"));
+      assert.ok(instructions.includes(gender === "neutral" ? "переформулируй их нейтрально" : gender === "masculine" ? "мужской род" : "женский род"));
+      assert.equal(reply, "Можно продолжить с текущего места. Что сейчас трудно?");
+    }
+  }
+});
+
+test("informal offline fallback preserves the address without assigning gender", async () => {
+  const { produceFreeTalkReply } = await import("../lib/free-talk.ts");
+  const reply = await produceFreeTalkReply({ profile: { trainer_id: "skinny", interaction_mode: "support", address_form: "informal", grammatical_gender: "feminine" }, messages: [], apiKey: "", model: "test" });
+  assert.match(reply, /тебе/);
+  assert.doesNotMatch(reply, /Вы вернулись/);
+});
