@@ -17,11 +17,12 @@ import { trainers, PRODUCT_VERSION, dayIndex, requiresSafetyRoute, safetyMessage
 
 export type TrainerProfile = { user_id: string; pseudonym: string; name: string; trainer_id: TrainerId; interaction_mode: InteractionMode; main_problem: string; consent_version: string; created_at: string; last_interaction_at: string; safety_flag: number };
 export type TrainerMessage = { id: string; role: "user" | "assistant"; text: string; trainer_id: TrainerId; created_at: string };
-export type TrainerPlan = { id: string; situation_id: string; skill_json: string; skill_title: string; entry_mode: string; intensity_before: number; intensity_after: number | null; attempt_id: string | null; result: "done" | "partial" | "failed" | "more" | null; paused?: number | null; reported_result?: "done" | "partial" | "failed" | "more" | null; worsened?: number | null; helpfulness: number | null; decision_reason_code: OutcomeReasonCode; decision_version: string; created_at: string };
+export type TrainerPlan = { id: string; situation_id: string; skill_json: string; skill_title: string; entry_mode: string; intensity_before: number; intensity_after: number | null; attempt_id: string | null; result: "done" | "partial" | "failed" | "more" | null; completed_part?: string | null; stopping_point?: string | null; paused?: number | null; reported_result?: "done" | "partial" | "failed" | "more" | null; worsened?: number | null; helpfulness: number | null; decision_reason_code: OutcomeReasonCode; decision_version: string; created_at: string };
 export type ContextualMemory = Pick<BehavioralPattern, "id" | "thought" | "urge" | "action" | "intervention_point" | "occurrence_count">;
 export type TrainerState = { profile: TrainerProfile | null; day: number; messages: TrainerMessage[]; plans: TrainerPlan[]; recap: ReturnType<typeof buildRecap>; engagedDays: number[]; continuity: TrainerContinuity; openLoops: OpenLoop[]; dueLoop: OpenLoop | null; pendingFollowUp: ConversationFollowUp | null; pendingSituationAnalysis: SituationAnalysisSession | null; contextualMemory: ContextualMemory | null };
 
 const statements = [
+  "CREATE TABLE IF NOT EXISTS trainer_performance_details (plan_id TEXT PRIMARY KEY,user_id TEXT NOT NULL,completed_part TEXT NOT NULL DEFAULT '',stopping_point TEXT NOT NULL DEFAULT '',updated_at TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS trainer_plan_pauses (plan_id TEXT PRIMARY KEY,user_id TEXT NOT NULL,paused INTEGER NOT NULL DEFAULT 0,loop_status TEXT,updated_at TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS trainer_outcome_reports (plan_id TEXT PRIMARY KEY,user_id TEXT NOT NULL,reported_result TEXT NOT NULL,worsened INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL)",
   "CREATE TABLE IF NOT EXISTS trainer_profiles (user_id TEXT PRIMARY KEY, pseudonym TEXT NOT NULL UNIQUE, name TEXT NOT NULL, trainer_id TEXT NOT NULL, interaction_mode TEXT NOT NULL DEFAULT 'explore', main_problem TEXT NOT NULL, consent_version TEXT NOT NULL, created_at TEXT NOT NULL, last_interaction_at TEXT NOT NULL, safety_flag INTEGER NOT NULL DEFAULT 0)",
@@ -65,7 +66,7 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
   if (!profile) return { profile: null, day: 1, messages: [], plans: [], recap: buildRecap([]), engagedDays: [], continuity: buildTrainerContinuity([]), openLoops: [], dueLoop: null, pendingFollowUp: null, pendingSituationAnalysis: null, contextualMemory: null };
   const [messages, plans, days, loops, due, pendingFollowUp, pendingPreAnalysis] = await Promise.all([
     db.prepare("SELECT * FROM (SELECT id,role,text,trainer_id,created_at FROM trainer_messages WHERE user_id=? ORDER BY created_at DESC,rowid DESC LIMIT 60) ORDER BY created_at,id").bind(user.userId).all<TrainerMessage>(),
-    db.prepare("SELECT p.*,r.reported_result,r.worsened,x.paused FROM trainer_plans p LEFT JOIN trainer_outcome_reports r ON r.plan_id=p.id AND r.user_id=p.user_id LEFT JOIN trainer_plan_pauses x ON x.plan_id=p.id AND x.user_id=p.user_id WHERE p.user_id=? ORDER BY p.created_at DESC,p.rowid DESC LIMIT 100").bind(user.userId).all<TrainerPlan>(),
+    db.prepare("SELECT p.*,r.reported_result,r.worsened,x.paused,d.completed_part,d.stopping_point FROM trainer_plans p LEFT JOIN trainer_outcome_reports r ON r.plan_id=p.id AND r.user_id=p.user_id LEFT JOIN trainer_plan_pauses x ON x.plan_id=p.id AND x.user_id=p.user_id LEFT JOIN trainer_performance_details d ON d.plan_id=p.id AND d.user_id=p.user_id WHERE p.user_id=? ORDER BY p.created_at DESC,p.rowid DESC LIMIT 100").bind(user.userId).all<TrainerPlan>(),
     db.prepare("SELECT DISTINCT day_index FROM pilot_events WHERE user_id=? AND event_name='engaged_return' ORDER BY day_index").bind(profile.pseudonym).all<{ day_index: number }>(),
     db.prepare("SELECT * FROM open_loops WHERE user_id=? AND status IN ('active','answered','paused') ORDER BY priority DESC, follow_up_due ASC").bind(user.userId).all<OpenLoop>(),
     dueOpenLoop(user.userId),
@@ -178,7 +179,7 @@ async function createRecommendedPlan(input: {
 }
 
 const bodySchema = z.object({
-  action: z.enum(["onboard", "settings", "open", "message", "situation", "confirmMemory", "dismissMemory", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain", "quickStop", "performance", "newSituation", "pause", "resume"]),
+  action: z.enum(["onboard", "settings", "open", "message", "situation", "confirmMemory", "dismissMemory", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain", "quickStop", "performance", "newSituation", "pause", "resume", "performanceDetails"]),
   requestId: z.string().uuid(), sessionId: z.string().uuid(),
   name: z.string().trim().min(1).max(60).optional(), trainerId: z.enum(["marsha", "beck", "skinny"]).optional(),
   interactionMode: z.enum(["support", "explore", "direct"]).optional(), text: z.string().trim().max(1200).optional(), consent: z.boolean().optional(),
@@ -187,6 +188,8 @@ const bodySchema = z.object({
   signal: z.enum(["thought", "body", "emotion", "urge"]).optional(), urge: z.enum(["avoid", "distract", "attack", "withdraw"]).optional(),
   analysisDepth: z.enum(["simple", "complex", "direct"]).optional(),
   planId: z.string().uuid().optional(), result: z.enum(["done", "failed", "more", "partial"]).optional(),
+  completedPart: z.string().trim().max(800).optional(),
+  stoppingPoint: z.string().trim().max(800).optional(),
   analysisId: z.string().uuid().optional(),
   worsened: z.boolean().optional(),
   helpfulness: z.number().int().min(0).max(10).optional(), understood: z.number().int().min(0).max(10).optional(), continueIntent: z.number().int().min(0).max(10).optional(),
@@ -485,7 +488,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         }
       }
     }
-    if (["start", "performance", "outcome", "reject", "resize", "replace"].includes(body.action)) {
+    if (["start", "performance", "performanceDetails", "outcome", "reject", "resize", "replace"].includes(body.action)) {
       const plan = await db.prepare("SELECT * FROM trainer_plans WHERE id=? AND user_id=?").bind(body.planId ?? "", user.userId).first<TrainerPlan>();
       if (!plan) throw new Error("Практика не найдена.");
       if (profile.safety_flag) throw new Error("Сначала завершите проверку безопасности.");
@@ -513,6 +516,12 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         const previous = await db.prepare("SELECT reported_result FROM trainer_outcome_reports WHERE plan_id=? AND user_id=?").bind(plan.id, user.userId).first<{ reported_result: string }>();
         if (previous && previous.reported_result !== body.result) throw new Error("Результат уже сохранён. Перейдите к оценке пользы.");
         await db.prepare("INSERT OR IGNORE INTO trainer_outcome_reports (plan_id,user_id,reported_result,created_at) VALUES (?,?,?,?)").bind(plan.id, user.userId, body.result, new Date().toISOString()).run();
+      }
+      if (body.action === "performanceDetails") {
+        const report = await db.prepare("SELECT reported_result FROM trainer_outcome_reports WHERE plan_id=? AND user_id=?").bind(plan.id,user.userId).first<{ reported_result: string }>();
+        if (plan.result || report?.reported_result !== "partial") throw new Error("Эти уточнения доступны после ответа «Частично», до оценки пользы.");
+        if (body.completedPart === undefined || body.stoppingPoint === undefined) throw new Error("Передайте оба поля уточнения; их можно оставить пустыми.");
+        await db.prepare("INSERT INTO trainer_performance_details (plan_id,user_id,completed_part,stopping_point,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(plan_id) DO UPDATE SET completed_part=excluded.completed_part,stopping_point=excluded.stopping_point,updated_at=excluded.updated_at").bind(plan.id,user.userId,body.completedPart,body.stoppingPoint,new Date().toISOString()).run();
       }
       if (body.action === "outcome" && !plan.result) {
         const report = await db.prepare("SELECT reported_result FROM trainer_outcome_reports WHERE plan_id=? AND user_id=?").bind(plan.id, user.userId).first<{ reported_result: string }>();

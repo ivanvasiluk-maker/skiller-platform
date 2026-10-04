@@ -1260,6 +1260,8 @@ async function runPauseCycle(db: D1Database) {
   const plan = state.plans[0];
   const loop = state.openLoops.find(item => item.plan_id === plan.id);
   if (!plan || !loop) throw new Error("Missing practice");
+  let detailsBlockedBeforePerformance = false;
+  try { await command({ action: "performanceDetails", planId: plan.id, completedPart: "Выдуманный результат", stoppingPoint: "" }); } catch { detailsBlockedBeforePerformance = true; }
   const paused = await command({ action: "pause", planId: plan.id });
   const returned = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
   let staleStartBlocked = false;
@@ -1273,12 +1275,14 @@ async function runPauseCycle(db: D1Database) {
   const resumed = await command({ action: "resume", planId: plan.id });
   await command({ action: "start", planId: plan.id });
   await command({ action: "performance", planId: plan.id, result: "partial" });
+  await command({ action: "performanceDetails", planId: plan.id, completedPart: "Открыл документ и написал заголовок", stoppingPoint: "Не начал первый абзац" });
   const requestId = crypto.randomUUID();
   const reportedPause = await command({ action: "pause", planId: plan.id, requestId });
   const duplicate = await command({ action: "pause", planId: plan.id, requestId });
   const reportedResume = await command({ action: "resume", planId: plan.id });
+  const detailsReturned = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
   const outcomes = await db.prepare("SELECT COUNT(*) AS count FROM outcomes WHERE attempt_id=?").bind(reportedResume.plans[0].attempt_id).first<{ count: number }>();
-  return { noFakeAttempt: attempts?.count === 0, noFakeResult: paused.plans[0].result === null && paused.plans[0].helpfulness === null, persisted: Boolean(returned.plans[0].paused), noActiveReminder: !paused.openLoops.some(item => item.plan_id === plan.id && item.status === "active") && !paused.continuity.openLoop, staleStartBlocked, analysisBlocksResume, sameStep: resumed.plans[0].id === plan.id && resumed.openLoops.find(item => item.plan_id === plan.id)?.planned_action === loop.planned_action, reportPreserved: reportedResume.plans[0].reported_result === "partial" && reportedResume.plans[0].result === null && outcomes?.count === 0, idempotent: reportedPause.messages.length === duplicate.messages.length };
+  return { detailsBlockedBeforePerformance, detailsPersisted: detailsReturned.plans[0].completed_part === "Открыл документ и написал заголовок" && detailsReturned.plans[0].stopping_point === "Не начал первый абзац", noFakeAttempt: attempts?.count === 0, noFakeResult: paused.plans[0].result === null && paused.plans[0].helpfulness === null, persisted: Boolean(returned.plans[0].paused), noActiveReminder: !paused.openLoops.some(item => item.plan_id === plan.id && item.status === "active") && !paused.continuity.openLoop, staleStartBlocked, analysisBlocksResume, sameStep: resumed.plans[0].id === plan.id && resumed.openLoops.find(item => item.plan_id === plan.id)?.planned_action === loop.planned_action, reportPreserved: reportedResume.plans[0].reported_result === "partial" && reportedResume.plans[0].result === null && outcomes?.count === 0, idempotent: reportedPause.messages.length === duplicate.messages.length };
 }
 
 async function runNewSituationCycle() {
