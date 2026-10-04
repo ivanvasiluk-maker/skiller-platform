@@ -1,4 +1,4 @@
-import type { CommunicationPreferences } from "@/lib/communication-preferences";
+import { systemPrompt, type CommunicationPreferences } from "@/lib/communication-preferences";
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { getRawDb } from "@/db";
@@ -254,7 +254,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           db.prepare("UPDATE open_loops SET status=COALESCE((SELECT loop_status FROM trainer_plan_pauses WHERE plan_id=? AND user_id=?),'active') WHERE plan_id=? AND user_id=? AND status='paused'").bind(plan.id,user.userId,plan.id,user.userId),
           db.prepare("UPDATE trainer_plan_pauses SET paused=0,updated_at=? WHERE plan_id=? AND user_id=?").bind(now,plan.id,user.userId),
         ]);
-        await message(profile, "assistant", plan.reported_result ? "Вернулись к практике. Ответ о выполнении уже сохранён; осталось отдельно оценить пользу." : "Вернулись к прежнему шагу. Продолжите, когда готовы; пауза не изменила его результат.", `${key}:resume`);
+        await message(profile, "assistant", plan.reported_result ? "Вернулись к практике. Ответ о выполнении уже сохранён; осталось отдельно оценить пользу." : systemPrompt(profile, "resume"), `${key}:resume`);
       }
     }
     if (body.action === "newSituation") {
@@ -359,7 +359,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         } else if (pendingAnalysis.kind === "chain") {
           await saveInterventionMemory({ userId: user.userId, skillId: pendingAnalysis.skill_id, loopId: pendingAnalysis.loop_id, outcome: "partial", chainBreakPoint: answer });
           await event(profile, body.sessionId, "chain_analysis_completed", pendingAnalysis.id, { loop_id: pendingAnalysis.loop_id ?? pendingAnalysis.plan_id });
-          await message(profile, "assistant", `Сохранил, где Вы остановились: «${answer}». В следующий раз продолжим с этого места, а не будем начинать разбор заново.`, `${key}:reply`);
+          await message(profile, "assistant", `${systemPrompt(profile, "stoppedPrefix")} «${answer}». В следующий раз продолжим с этого места, а не будем начинать разбор заново.`, `${key}:reply`);
         } else if (pendingAnalysis.kind === "missing_link") {
           await saveInterventionMemory({ userId: user.userId, skillId: pendingAnalysis.skill_id, loopId: pendingAnalysis.loop_id, outcome: "not_done", missingLink: answer });
           await event(profile, body.sessionId, "missing_link_completed", pendingAnalysis.id, { loop_id: pendingAnalysis.loop_id ?? pendingAnalysis.plan_id });
@@ -422,7 +422,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           });
         } else if (isConfirmationStage && isBareRejection(answer)) {
           await requestSituationCorrection(pendingPreAnalysis);
-          await message(profile, "assistant", pendingPreAnalysis.analysis_depth === "complex" ? `Хорошо. Можно исправлять звенья по одному, пока цепочка не станет точной. ${chainEditPrompt}` : "Хорошо, не буду считать гипотезу верной. Что именно в ней не совпадает с Вашим опытом?", `${key}:reply`);
+          await message(profile, "assistant", pendingPreAnalysis.analysis_depth === "complex" ? `Хорошо. Можно исправлять звенья по одному, пока цепочка не станет точной. ${chainEditPrompt}` : systemPrompt(profile, "reviseHypothesis"), `${key}:reply`);
         } else if (pendingPreAnalysis.analysis_depth === "complex") {
           const sessionForStep = isConfirmationStage ? { ...pendingPreAnalysis, stage: "chain_correct" as const } : pendingPreAnalysis;
           const reply = await advanceComplexAnalysis(sessionForStep, answer);
@@ -527,7 +527,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         if (loop) await resolveOpenLoop(loop.id, "skill_rejected");
         await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "skill_rejected" });
         await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "rejection" });
-        await message(profile, "assistant", "Хорошо, не буду убеждать Вас использовать этот шаг. Что именно не подошло: формулировка, само действие, момент или что-то другое?", `${key}:reply`);
+        await message(profile, "assistant", systemPrompt(profile, "rejectPractice"), `${key}:reply`);
       }
       if (body.action === "performance" && !plan.result) {
         if (!plan.attempt_id || !body.result) throw new Error("Начните практику и укажите, что удалось сделать.");
@@ -573,7 +573,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: execution });
           await saveInterventionMemory({ userId: user.userId, skillId: skill.id, loopId: loop?.id ?? null, outcome: "worsened" });
           await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "worsened" });
-          await message(profile, "assistant", "Сохранил отдельно: что удалось сделать и что после практики стало хуже. Пока остановите эту практику. Что именно усилилось? Если есть непосредственная опасность, обратитесь за живой помощью; в ЕС — 112.", `${key}:reply`);
+          await message(profile, "assistant", systemPrompt(profile, "worsened"), `${key}:reply`);
         } else if (body.result === "done") {
           await event(profile, body.sessionId, "outcome_done", loopId, { loop_id: loopId });
           if (loop) await resolveOpenLoop(loop.id, "done");
@@ -587,7 +587,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           if (loop) await resolveOpenLoop(loop.id, "partial");
           await event(profile, body.sessionId, "open_loop_resolved", loopId, { loop_id: loopId, outcome: "partial" });
           await createConversationFollowUp({ userId: user.userId, planId: plan.id, loopId: loop?.id ?? null, skillId: skill.id, kind: "chain" });
-          await message(profile, "assistant", "Частично — это тоже результат. До какого конкретно момента Вы дошли? Что было последним сделанным действием?", `${key}:reply`);
+          await message(profile, "assistant", systemPrompt(profile, "partial"), `${key}:reply`);
         } else if (body.result === "failed") {
           // PATCH 1.1: NOT_DONE → Missing Link Analysis без автозамены skill.
           await event(profile, body.sessionId, "outcome_not_done", loopId, { loop_id: loopId });

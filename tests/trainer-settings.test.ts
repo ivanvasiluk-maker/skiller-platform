@@ -63,3 +63,17 @@ test("changing one setting does not invent the other change", () => {
     final_trainer_id: "marsha",
   });
 });
+
+
+test("system prompts use explicit address variants and retain emergency contact", async () => {
+  const { systemPrompt } = await import("../lib/communication-preferences.ts");
+  assert.match(systemPrompt({}, "reviseHypothesis"), /Вашим/);
+  assert.match(systemPrompt({ address_form: "informal" }, "reviseHypothesis"), /твоим/);
+  assert.match(systemPrompt({ address_form: "informal" }, "rejectPractice"), /тебя/);
+  for (const address_form of ["formal", "informal"] as const) {
+    for (const grammatical_gender of ["neutral", "masculine", "feminine"] as const) {
+      assert.match(systemPrompt({ address_form, grammatical_gender }, "worsened"), /112/);
+      assert.equal(systemPrompt({ address_form, grammatical_gender }, "partial"), systemPrompt({ address_form }, "partial"));
+    }
+  }
+});

@@ -1316,6 +1316,11 @@ async function runCommunicationPreferencesCycle() {
   const gendered = await command({ action: "settings", grammaticalGender: "feminine" });
   const planned = await command({ action: "message", mode: "stuck", text: "Мне кажется, я не справлюсь" });
   const practice = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
+  const duringPractice = await command({ action: "settings", grammaticalGender: "masculine" });
+  const restoredGender = await command({ action: "settings", grammaticalGender: "feminine" });
+  const rejected = await command({ action: "reject", planId: practice.plans[0]?.id });
+  const quoted = "Вы сказали: я не готова";
+  const explained = await command({ action: "message", mode: "stuck", text: quoted });
   const changed = await command({ action: "settings", addressForm: "formal" });
   const reloaded = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
   let invalidBlocked = false;
@@ -1325,7 +1330,10 @@ async function runCommunicationPreferencesCycle() {
     independent: addressed.profile?.grammatical_gender === "neutral" && gendered.profile?.address_form === "informal",
     persisted: reloaded.profile?.address_form === "formal" && reloaded.profile?.grammatical_gender === "feminine",
     questionPreserved: JSON.stringify(asked.pendingSituationAnalysis) === JSON.stringify(gendered.pendingSituationAnalysis) && JSON.stringify(asked.messages) === JSON.stringify(gendered.messages),
-    practicePreserved: planned.pendingSituationAnalysis !== null && practice.plans.length > 0 && JSON.stringify(practice.plans) === JSON.stringify(changed.plans),
+    practicePreserved: planned.pendingSituationAnalysis !== null && practice.plans.length > 0 && JSON.stringify(practice.plans) === JSON.stringify(duringPractice.plans) && restoredGender.profile?.grammatical_gender === "feminine",
+    rejectionAddress: rejected.messages.at(-1)?.text.includes("убеждать тебя") === true,
+    userQuotePreserved: explained.messages.some(message => message.role === "user" && message.text === quoted),
+    historyPreserved: rejected.messages.every(message => changed.messages.some(saved => saved.id === message.id && saved.text === message.text)),
     invalidBlocked,
   };
 }
