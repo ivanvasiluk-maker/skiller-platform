@@ -362,14 +362,24 @@ function PlanCard({ plan, plannedAction, busy, command }: { plan: TrainerPlan; p
       <span className="trainer-kicker">ОДНО ПОСИЛЬНОЕ ДЕЙСТВИЕ · ОРИЕНТИР {durationLabel}</span>
       <h2>{concreteAction ?? skill.title}</h2>
       <p>{concreteAction ? "Сейчас достаточно сделать только этот шаг. После него можно остановиться и написать тренеру." : skill.description}</p>
-      <p className="trainer-decision-reason"><strong>{concreteAction ? `Навык для тренировки: ${skill.title}` : "Почему такой шаг"}</strong><span>{concreteAction ? skill.description : explainDecisionReason(plan.decision_reason_code)}</span></p>
-      {concreteAction && <ol><li><strong>{concreteAction}</strong><p>Не нужно продолжать автоматически. Сначала зафиксируйте результат этого действия.</p></li></ol>}
+      <details className="micro-start-example">
+        <summary>Почему предложен этот шаг?</summary>
+        <p><strong>Навык:</strong> {skill.title}</p>
+        <p>{skill.description}</p>
+        <p>{explainDecisionReason(plan.decision_reason_code)}</p>
+      </details>
+      {concreteAction && <p>Не нужно продолжать автоматически. Сначала отметьте результат этого действия.</p>}
       {skill.id === "micro-start" && <MicroStartExample plannedAction={concreteAction} />}
       {skill.id === "stop" && <StopExample plannedAction={concreteAction} />}
       {skill.id === "grounding-543" && <GroundingExample plannedAction={concreteAction} />}
       <SkillExample skillId={skill.id} plannedAction={concreteAction} />
-      <span className="trainer-kicker">ШАГИ ПРАКТИКИ</span>
-      <ol>{displaySteps.map((step) => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
+      {concreteAction ? <details className="micro-start-example">
+        <summary>Показать шаги навыка</summary>
+        <p>Это справка к навыку. Сейчас Ваше задание — договорённость выше; остальные шаги выполнять не обязательно.</p>
+        <ol>{displaySteps.map(step => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
+      </details> : <><span className="trainer-kicker">ШАГИ ПРАКТИКИ</span>
+        <ol>{displaySteps.map(step => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
+      </>}
       {!plan.attempt_id ? (
         <div className="trainer-actions"><button className="trainer-primary" disabled={busy} onClick={() => command({ action: "start", planId: plan.id })}>Начать действие <Play size={16}/></button><button className="trainer-secondary" disabled={busy} onClick={() => command({ action: "reject", planId: plan.id })}>Шаг не подходит</button></div>
       ) : (
