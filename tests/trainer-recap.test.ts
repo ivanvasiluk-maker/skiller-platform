@@ -139,7 +139,7 @@ test("one helpful outcome stays low confidence and suggests repeat", () => {
     }),
   ], [1], "2026-09-14T08:00:00.000Z");
 
-  assert.match(recap.day7.workingHypothesis, /один завершённый outcome/);
+  assert.match(recap.day7.workingHypothesis, /один завершённый результат/);
   assert.equal(recap.day7.confidenceLevel, "low");
   assert.equal(recap.day7.nextExperiment.kind, "repeat");
 });
@@ -164,7 +164,7 @@ test("an unresolved week ends with closing the open loop", () => {
   ], [1], "2026-09-14T08:00:00.000Z");
 
   assert.equal(recap.day7.nextExperiment.kind, "close_loop");
-  assert.match(recap.day7.workingHypothesis, /outcome неизвестен/);
+  assert.match(recap.day7.workingHypothesis, /результат неизвестен/);
 });
 
 
@@ -193,4 +193,18 @@ test("partial details are attributed to the user without inferring benefit or re
   assert.deepEqual(recap.helpful, []);
   const full = buildRecap([plan({ result: "done", completed_part: "Старое уточнение" })]);
   assert.ok(!full.facts[0].includes("Старое уточнение"));
+});
+
+
+test("recap address changes only wording and preserves facts and user quotes", () => {
+  const quote = "Вы сказали: я сделала часть";
+  const plans = [plan({ attempt_id: "a", result: "done", helpfulness: 8 }), plan({ attempt_id: "b", result: "done", helpfulness: 7 }), plan({ attempt_id: "c", result: "partial", helpfulness: 4, completed_part: quote, stopping_point: "Ваш пример" })];
+  const formal = buildRecap(plans);
+  const informal = buildRecap(plans, [], undefined, { address_form: "informal", grammatical_gender: "feminine" });
+  assert.match(formal.day7.workingHypothesis, /для Вас/);
+  assert.match(informal.day7.workingHypothesis, /для тебя/);
+  assert.ok(informal.facts[2].includes(`«${quote}»`));
+  assert.ok(informal.facts[2].includes("«Ваш пример»"));
+  for (const key of ["attempts", "completed", "outcomesRecorded", "helpful", "difficult", "repeated", "unknown"] as const) assert.deepEqual(informal[key], formal[key]);
+  assert.doesNotMatch(JSON.stringify([informal.facts, informal.day7]), /outcome|helpfulness/);
 });

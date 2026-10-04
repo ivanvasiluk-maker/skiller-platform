@@ -98,7 +98,7 @@ export async function trainerState(user: ChatGPTUser): Promise<TrainerState> {
     messages: messages.results.slice(-60),
     hasEarlierMessages: messages.results.length > 60,
     plans: plans.results,
-    recap: buildRecap(plans.results, engagedDays, profile.created_at),
+    recap: buildRecap(plans.results, engagedDays, profile.created_at, profile),
     engagedDays,
     continuity: buildTrainerContinuity(plans.results.filter(plan => !plan.paused), {
       day,
