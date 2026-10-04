@@ -77,3 +77,12 @@ test("system prompts use explicit address variants and retain emergency contact"
     }
   }
 });
+
+
+test("hypothesis fragments keep address independent from gender", async () => {
+  const { systemPrompt } = await import("../lib/communication-preferences.ts");
+  for (const grammatical_gender of ["neutral", "masculine", "feminine"] as const) {
+    assert.equal(systemPrompt({ address_form: "informal", grammatical_gender }, "hypothesisConfirmation"), "Это похоже на твой опыт?");
+    assert.equal(systemPrompt({ address_form: "formal", grammatical_gender }, "correctionLabel"), "Ваше уточнение:");
+  }
+});

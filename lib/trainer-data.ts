@@ -299,7 +299,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
       const analysis = await pendingSituationAnalysis(user.userId);
       const pattern = analysis ? await behavioralPatternById(user.userId, analysis.memory_pattern_id) : null;
       if (!analysis || !pattern || analysis.memory_dismissed) throw new Error("Подходящее воспоминание для этого разбора не найдено.");
-      const reply = await applyBehavioralMemoryDraft(analysis, pattern);
+      const reply = await applyBehavioralMemoryDraft(analysis, pattern, profile);
       await message(profile, "assistant", reply, `${key}:reply`);
       await event(profile, body.sessionId, "behavioral_memory_confirmed", analysis.id);
     }
@@ -402,7 +402,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
         } else if (pendingPreAnalysis.stage === "chain_edit_choose") {
           const editField = parseChainEditField(answer);
           const reply = editField
-            ? await chooseChainEditField(pendingPreAnalysis, editField)
+            ? await chooseChainEditField(pendingPreAnalysis, editField, profile)
             : `Не смог однозначно определить звено. ${chainEditPrompt}`;
           await message(profile, "assistant", reply, `${key}:reply`);
         } else if (isConfirmationStage && isHypothesisConfirmed(answer)) {
@@ -431,7 +431,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           }
           await message(profile, "assistant", reply, `${key}:reply`);
         } else {
-          const hypothesis = buildWorkingHypothesis(pendingPreAnalysis, answer);
+          const hypothesis = buildWorkingHypothesis(pendingPreAnalysis, answer, profile);
           await saveSituationHypothesis(pendingPreAnalysis.id, answer, hypothesis);
           await event(profile, body.sessionId, "analysis_hypothesis_shown", pendingPreAnalysis.id);
           await message(profile, "assistant", hypothesis, `${key}:reply`);

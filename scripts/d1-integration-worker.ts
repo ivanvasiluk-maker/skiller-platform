@@ -1333,6 +1333,7 @@ async function runCommunicationPreferencesCycle() {
     persisted: reloaded.profile?.address_form === "formal" && reloaded.profile?.grammatical_gender === "feminine",
     questionPreserved: JSON.stringify(asked.pendingSituationAnalysis) === JSON.stringify(gendered.pendingSituationAnalysis) && JSON.stringify(asked.messages) === JSON.stringify(gendered.messages),
     practicePreserved: planned.pendingSituationAnalysis !== null && practice.plans.length > 0 && JSON.stringify(practice.plans) === JSON.stringify(duringPractice.plans) && restoredGender.profile?.grammatical_gender === "feminine",
+    hypothesisCorrectionAddress: planned.messages.at(-1)?.text.includes("поправь одним предложением") === true,
     hypothesisAddress: declined.messages.at(-1)?.text.includes("твоим опытом") === true && revised.pendingSituationAnalysis !== null,
     rejectionAddress: rejected.messages.at(-1)?.text.includes("убеждать тебя") === true,
     userQuotePreserved: explained.messages.some(message => message.role === "user" && message.text === quoted),
