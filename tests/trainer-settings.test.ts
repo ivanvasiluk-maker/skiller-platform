@@ -86,3 +86,17 @@ test("hypothesis fragments keep address independent from gender", async () => {
     assert.equal(systemPrompt({ address_form: "formal", grammatical_gender }, "correctionLabel"), "Ваше уточнение:");
   }
 });
+
+
+test("catalog presentation adapts exact known fields without altering custom steps or snapshots", async () => {
+  const { displaySkillSteps } = await import("../lib/skill-instruction-copy.ts");
+  const steps = [{ title: "Назовите след", copy: "Что должно остаться после действия?" }, { title: "Моя версия", copy: "Вы сказали: сделайте мой шаг" }];
+  const snapshot = JSON.stringify(steps);
+  assert.equal(displaySkillSteps("micro-start", steps)[0].title, "Назвать след");
+  assert.deepEqual(displaySkillSteps("micro-start", steps)[1], steps[1]);
+  assert.deepEqual(displaySkillSteps("custom", steps), steps);
+  assert.equal(JSON.stringify(steps), snapshot);
+  assert.deepEqual(displaySkillSteps("constructor", steps), steps);
+  assert.deepEqual(displaySkillSteps("micro-start", [{ title: "constructor", copy: "__proto__" }]), [{ title: "constructor", copy: "__proto__" }]);
+  assert.match(displaySkillSteps("distract-delay", [{ title: "Назначьте время", copy: "Вернитесь к задаче на пять минут, затем решите заново." }])[0].copy, /выбранный посильный интервал/);
+});

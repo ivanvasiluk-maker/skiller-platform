@@ -1,5 +1,6 @@
 "use client";
 import { systemPrompt, type CommunicationPreferences } from "@/lib/communication-preferences";
+import { displaySkillSteps } from "@/lib/skill-instruction-copy";
 import Link from "next/link";
 import { QuickStop } from "./quick-stop";
 import { StopExample } from "./stop-example";
@@ -387,9 +388,7 @@ function Score({ label, value, onChange }: { label: string; value: number; onCha
 function PlanCard({ plan, plannedAction, busy, command, onPause, preferences }: { preferences: CommunicationPreferences; plan: TrainerPlan; plannedAction?: string; busy: boolean; onPause: () => Promise<void>; command: (p: Record<string, unknown>) => Promise<TrainerState | null> }) {
   const skill = JSON.parse(plan.skill_json) as SkillView;
   const durationLabel = `${Math.floor(skill.durationSeconds / 60)}:${String(skill.durationSeconds % 60).padStart(2, "0")}`;
-  const displaySteps = skill.steps.map(step => skill.id === "distract-delay" && step.copy === "Вернитесь к задаче на пять минут, затем решите заново."
-    ? { ...step, copy: "Вернитесь к задаче на выбранный посильный интервал, затем решите заново." }
-    : step);
+  const displaySteps = displaySkillSteps(skill.id, skill.steps);
   const concreteAction = plannedAction && plannedAction !== skill.title ? plannedAction : null;
   const [completedPart, setCompletedPart] = useState(plan.completed_part ?? "");
   const [stoppingPoint, setStoppingPoint] = useState(plan.stopping_point ?? "");
