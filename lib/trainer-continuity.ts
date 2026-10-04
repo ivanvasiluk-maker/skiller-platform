@@ -10,6 +10,8 @@ export type ContinuityPlan = {
   attempt_id: string | null;
   result: "done" | "partial" | "failed" | "more" | null;
   helpfulness: number | null;
+  completed_part?: string | null;
+  stopping_point?: string | null;
   paused?: number | null;
   reported_result?: "done" | "partial" | "failed" | "more" | null;
   worsened?: number | null;

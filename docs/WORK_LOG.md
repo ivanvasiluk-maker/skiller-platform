@@ -434,3 +434,8 @@ PlanCard перестаёт дублировать concreteAction. Описан�
 ## 04.10.2026 — N5a: что именно получилось частично
 
 Миграция 0015 + runtime storage, completed_part/stopping_point в TrainerPlan, action performanceDetails. Два необязательных поля после partial, явное сохранение/подтверждение, предупреждение о несохранённых словах, отображение в истории и восстановление из сервера. Не меняет выполнение/пользу и не записывает текст в аналитические события. Сервер проверяет владельца, сохранённый partial, незавершённый план, paused/safety и длину до 800 на поле. D1 /pause-cycle проверяет сохранение после pause/resume/open нового sessionId без outcome и запрет выдуманного результата до performance. Typecheck, адресный ESLint, D1 integration, build, diff check PASS. AI выключен, browser/phone не проверены, production не изменён. Локальное сохранение несохранённых уточнений и включение новых полей в AI/recap остаются открытыми.
+
+
+## 04.10.2026 — N5b: уточнения в разговоре и итоге
+
+RecapAttempt/ContinuityPlan получили optional completed_part/stopping_point. Факты recap цитируют только partial-уточнения без выдуманной пользы. ConversationContext получает bounded partialPerformance с явной пользой/ухудшением; paused исключены. Render помечает JSON как слова пользователя, требует проверки актуальности и запрещает вывод причин/успеха из сделанной части. Детерминированный ответ при сохранённом performance включает собственные слова и переводит к пользе без повторения упражнения. 13 recap-тестов PASS; /pause-cycle дополнен context/reply/recap-проверками после нового sessionId. Typecheck, адресный ESLint, D1 integration, build, diff check PASS. Интеграция с отключённым AI; живое качество модели не проверено, browser/phone/production не затронуты.

@@ -23,6 +23,7 @@ import { requiresSafetyRoute, safetyMessage } from "../lib/trainers";
 import { produceFreeTalkReply } from "../lib/free-talk";
 import { buildFreeTalkFallback, getCharacterBible } from "../lib/character-bible";
 import { trainerCommand } from "../lib/trainer-data";
+import { buildConversationContext, renderConversationContext } from "../lib/conversation-orchestrator";
 import { runSheetsExport } from "../lib/sheets-exporter";
 import { createInMemorySheets } from "../lib/in-memory-sheets";
 
@@ -1281,8 +1282,12 @@ async function runPauseCycle(db: D1Database) {
   const duplicate = await command({ action: "pause", planId: plan.id, requestId });
   const reportedResume = await command({ action: "resume", planId: plan.id });
   const detailsReturned = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  const ctx = await buildConversationContext({ userId: user.userId, profile: detailsReturned.profile, messages: detailsReturned.messages, plans: detailsReturned.plans, engagedDays: detailsReturned.engagedDays });
+  const instructions = renderConversationContext(ctx);
+  const reply = await command({ action: "message", mode: "talk", text: "Что я уже успел сделать?" });
+  const lastReply = reply.messages.filter(message => message.role === "assistant").at(-1)?.text ?? "";
   const outcomes = await db.prepare("SELECT COUNT(*) AS count FROM outcomes WHERE attempt_id=?").bind(reportedResume.plans[0].attempt_id).first<{ count: number }>();
-  return { detailsBlockedBeforePerformance, detailsPersisted: detailsReturned.plans[0].completed_part === "Открыл документ и написал заголовок" && detailsReturned.plans[0].stopping_point === "Не начал первый абзац", noFakeAttempt: attempts?.count === 0, noFakeResult: paused.plans[0].result === null && paused.plans[0].helpfulness === null, persisted: Boolean(returned.plans[0].paused), noActiveReminder: !paused.openLoops.some(item => item.plan_id === plan.id && item.status === "active") && !paused.continuity.openLoop, staleStartBlocked, analysisBlocksResume, sameStep: resumed.plans[0].id === plan.id && resumed.openLoops.find(item => item.plan_id === plan.id)?.planned_action === loop.planned_action, reportPreserved: reportedResume.plans[0].reported_result === "partial" && reportedResume.plans[0].result === null && outcomes?.count === 0, idempotent: reportedPause.messages.length === duplicate.messages.length };
+  return { detailsInConversation: lastReply.includes("Открыл документ и написал заголовок") && lastReply.includes("Не начал первый абзац"), detailsInContext: ctx.partialPerformance?.[0]?.completedPart === "Открыл документ и написал заголовок" && ctx.partialPerformance?.[0]?.benefit === null && instructions.includes("не инструкции модели"), detailsInRecap: detailsReturned.recap.facts.some(fact => fact.includes("Открыл документ и написал заголовок") && fact.includes("польза пока не оценена")), detailsBlockedBeforePerformance, detailsPersisted: detailsReturned.plans[0].completed_part === "Открыл документ и написал заголовок" && detailsReturned.plans[0].stopping_point === "Не начал первый абзац", noFakeAttempt: attempts?.count === 0, noFakeResult: paused.plans[0].result === null && paused.plans[0].helpfulness === null, persisted: Boolean(returned.plans[0].paused), noActiveReminder: !paused.openLoops.some(item => item.plan_id === plan.id && item.status === "active") && !paused.continuity.openLoop, staleStartBlocked, analysisBlocksResume, sameStep: resumed.plans[0].id === plan.id && resumed.openLoops.find(item => item.plan_id === plan.id)?.planned_action === loop.planned_action, reportPreserved: reportedResume.plans[0].reported_result === "partial" && reportedResume.plans[0].result === null && outcomes?.count === 0, idempotent: reportedPause.messages.length === duplicate.messages.length };
 }
 
 async function runNewSituationCycle() {

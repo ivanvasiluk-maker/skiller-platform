@@ -182,3 +182,15 @@ test("worsening remains distinct from execution and a numeric rating", () => {
   assert.ok(!recap.facts[0].includes("0/10"));
   assert.deepEqual(recap.helpful, []);
 });
+
+
+test("partial details are attributed to the user without inferring benefit or reasons", () => {
+  const recap = buildRecap([plan({ attempt_id: "attempt-1", reported_result: "partial", completed_part: "Открыл документ", stopping_point: "До первого абзаца" })]);
+  assert.match(recap.facts[0], /По Вашим словам, удалось: «Открыл документ»/);
+  assert.match(recap.facts[0], /Остановились: «До первого абзаца»/);
+  assert.match(recap.facts[0], /польза пока не оценена/);
+  assert.equal(recap.completed, 0);
+  assert.deepEqual(recap.helpful, []);
+  const full = buildRecap([plan({ result: "done", completed_part: "Старое уточнение" })]);
+  assert.ok(!full.facts[0].includes("Старое уточнение"));
+});

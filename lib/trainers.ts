@@ -53,6 +53,8 @@ export function requiresSafetyRoute(text: string, risk: string = "no") {
 export const safetyMessage = "Сейчас важнее живая помощь. Если есть непосредственная опасность, свяжитесь с местной экстренной службой или попросите человека рядом помочь это сделать. По возможности останьтесь рядом с человеком, которому доверяете, и отойдите от того, чем можно причинить вред. SKILLER не является экстренной службой. Автоматическую практику сейчас остановим.";
 
 export type RecapAttempt = {
+  completed_part?: string | null;
+  stopping_point?: string | null;
   attempt_id: string | null;
   result: ActionResult | null;
   helpfulness: number | null;
@@ -228,6 +230,14 @@ export function buildRecap(
         ? "полезность не оценена"
         : `полезность ${plan.helpfulness}/10`;
     return `«${plan.skill_title}»: ${recapResult(plan.result)}; ${helpfulness}.`;
+  }).map((fact, index) => {
+    const plan = scopedPlans[index];
+    if ((plan.result ?? plan.reported_result) !== "partial") return fact;
+    const details = [
+      plan.completed_part?.trim() ? `По Вашим словам, удалось: «${plan.completed_part}».` : "",
+      plan.stopping_point?.trim() ? `Остановились: «${plan.stopping_point}».` : "",
+    ].filter(Boolean).join(" ");
+    return details ? `${fact} ${details}` : fact;
   });
 
   const unknown = unique([

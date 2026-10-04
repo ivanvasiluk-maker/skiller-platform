@@ -444,7 +444,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
           situation: { mode: body.mode ?? "talk" },
         });
         const replyText = pendingPlan?.reported_result
-          ? "Ответ о выполнении уже сохранён. В карточке можно отдельно оценить пользу или отметить, что стало хуже. Повторять практику для этого не нужно."
+          ? `${pendingPlan.reported_result === "partial" && pendingPlan.completed_part ? `Вы сообщили, что удалось: «${pendingPlan.completed_part}». ` : ""}${pendingPlan.reported_result === "partial" && pendingPlan.stopping_point ? `Остановились: «${pendingPlan.stopping_point}». ` : ""}Ответ о выполнении уже сохранён. В карточке можно отдельно оценить пользу или отметить, что стало хуже. Повторять практику для этого не нужно.`
           : due
           ? `Возвращаюсь к нашей договорённости: «${due.planned_action}». Как прошло — получилось, частично или не получилось?`
           : await freeTalk(profile, state.messages.slice(-8), buildOrchestratorInstructions(ctx));
