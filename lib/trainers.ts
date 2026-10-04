@@ -1,3 +1,4 @@
+import { systemPrompt, type CommunicationPreferences } from "./communication-preferences.ts";
 export const PRODUCT_VERSION = "frozen-mvp-1.0";
 // Версия поведения персонажей = версия Character Bible (lib/character-bible.ts).
 export const CHARACTER_VERSION = "1.1";
@@ -6,7 +7,7 @@ export const trainers = {
     name: "Марша", initial: "М", color: "#31796a", background: "#e7f1eb", symbol: "◡",
     title: "Тепло. Опора. Маленький шаг.",
     description: "Помогу снизить давление и найти действие, которое сейчас по силам.",
-    greeting: "Давай начнём с того, что сейчас непросто. Не нужно сразу справляться со всем.",
+    greeting: "Давайте начнём с того, что сейчас непросто. Не нужно сразу справляться со всем.",
     success: "Вы попробовали — и у нас есть реальный результат. Давайте бережно посмотрим, что помогло.",
     failure: "Этот шаг сейчас не подошёл. Это информация, а не повод ругать себя. Сделаем его меньше?",
     return: "Можно продолжить с текущего места. Пропуск не обнуляет сделанное.",
@@ -37,7 +38,7 @@ export type TrainerId = keyof typeof trainers;
 export const interactionModes = { support: "Поддержи меня", explore: "Давай спокойно разберём", direct: "Говори прямо" } as const;
 export type InteractionMode = keyof typeof interactionModes;
 export type EntryMode = "practice" | "stuck" | "distress" | "talk";
-export type ActionResult = "done" | "failed" | "more";
+export type ActionResult = "done" | "partial" | "failed" | "more";
 
 export function dayIndex(start: string, now = new Date()) {
   const parsed = Date.parse(start.includes("T") ? start : start.replace(" ", "T") + "Z");
@@ -53,10 +54,14 @@ export function requiresSafetyRoute(text: string, risk: string = "no") {
 export const safetyMessage = "Сейчас важнее живая помощь. Если есть непосредственная опасность, свяжитесь с местной экстренной службой или попросите человека рядом помочь это сделать. По возможности останьтесь рядом с человеком, которому доверяете, и отойдите от того, чем можно причинить вред. SKILLER не является экстренной службой. Автоматическую практику сейчас остановим.";
 
 export type RecapAttempt = {
+  completed_part?: string | null;
+  stopping_point?: string | null;
   attempt_id: string | null;
   result: ActionResult | null;
   helpfulness: number | null;
   skill_title: string;
+  reported_result?: ActionResult | null;
+  worsened?: number | null;
   created_at: string;
 };
 
@@ -66,6 +71,7 @@ function unique(values: string[]) {
 
 function recapResult(result: ActionResult) {
   if (result === "done") return "получилось";
+  if (result === "partial") return "частично";
   if (result === "more") return "сделано больше запланированного";
   return "не получилось";
 }
@@ -95,6 +101,7 @@ function buildDay7Insight(input: {
   unresolved: RecapAttempt[];
   repeated: string[];
   outcomesRecorded: number;
+  preferences: CommunicationPreferences;
 }) {
   const repeatedTitle = input.repeated[0] ?? null;
   const oneHelpful = input.helpful[0] ?? null;
@@ -102,7 +109,7 @@ function buildDay7Insight(input: {
   const openLoop = input.unresolved[0] ?? null;
 
   let workingHypothesis =
-    "За первую неделю пока недостаточно сохранённых outcomes, чтобы выделить рабочий навык.";
+    "За первую неделю пока недостаточно сохранённых результатов, чтобы выделить рабочий навык.";
   let confidenceLevel: "low" | "limited" = "low";
   let confidence =
     "Низкая уверенность: данных мало или они неполные. Итог описывает только сохранённые самоотчёты и не объясняет причины.";
@@ -116,14 +123,14 @@ function buildDay7Insight(input: {
       | "first_try",
     title: "Проверить один новый маленький шаг",
     prompt:
-      "Выбрать одно посильное действие, выполнить или честно не выполнить его и сохранить outcome с оценкой полезности.",
+      "Выбрать одно посильное действие, выполнить или честно не выполнить его и сохранить результат с оценкой пользы.",
   };
 
   if (repeatedTitle) {
     const count = input.helpful.filter(
       (plan) => plan.skill_title === repeatedTitle,
     ).length;
-    workingHypothesis = `Рабочая гипотеза: «${repeatedTitle}» может быть для тебя повторяемым полезным шагом. Основание — ${count} сохранённых outcomes с полезностью не ниже 6/10.`;
+    workingHypothesis = `Рабочая гипотеза: «${repeatedTitle}» может быть ${systemPrompt(input.preferences, "recapFor")} повторяемым полезным шагом. Основание — ${count} сохранённых результатов с оценкой пользы не ниже 6/10.`;
     confidenceLevel = "limited";
     confidence =
       "Ограниченная уверенность: результат повторился, но это самоотчёт за одну неделю без контрольного сравнения. Совпадение не доказывает причину улучшения.";
@@ -131,10 +138,10 @@ function buildDay7Insight(input: {
       kind: "transfer",
       title: `Проверить перенос «${repeatedTitle}»`,
       prompt:
-        "Использовать навык в другом независимо подходящем типе ситуации и снова сохранить outcome и helpfulness.",
+        "Использовать навык в другом независимо подходящем типе ситуации и снова отметить результат и оценить пользу.",
     };
   } else if (oneHelpful) {
-    workingHypothesis = `Рабочая гипотеза: «${oneHelpful.skill_title}» стоит проверить повторно. Основание — один завершённый outcome с полезностью ${oneHelpful.helpfulness}/10.`;
+    workingHypothesis = `Рабочая гипотеза: «${oneHelpful.skill_title}» стоит проверить повторно. Основание — один завершённый результат с полезностью ${oneHelpful.helpfulness}/10.`;
     nextExperiment = {
       kind: "repeat",
       title: `Повторить «${oneHelpful.skill_title}»`,
@@ -146,16 +153,16 @@ function buildDay7Insight(input: {
       latestDifficult.helpfulness !== null &&
       latestDifficult.helpfulness <= 3;
     const evidence =
-      latestDifficult.helpfulness === null
+      latestDifficult.worsened ? `${recapResult(latestDifficult.result!)}, после практики стало хуже` : latestDifficult.helpfulness === null
         ? recapResult(latestDifficult.result!)
         : `${recapResult(latestDifficult.result!)}, полезность ${latestDifficult.helpfulness}/10`;
-    workingHypothesis = `Рабочая гипотеза: «${latestDifficult.skill_title}» в прежнем виде пока не подтверждён как полезный. Основание — сохранённый outcome: ${evidence}. Причина результата неизвестна.`;
+    workingHypothesis = `Рабочая гипотеза: «${latestDifficult.skill_title}» в прежнем виде пока не подтверждён как полезный. Основание — сохранённый результат: ${evidence}. Причина результата неизвестна.`;
     nextExperiment = lowFit
       ? {
           kind: "replace",
           title: `Подобрать замену для «${latestDifficult.skill_title}»`,
           prompt:
-            "В новом конкретном эпизоде выбрать другой безопасный навык и сравнить outcome.",
+            "В новом конкретном эпизоде выбрать другой безопасный навык и сравнить результат.",
         }
       : {
           kind: "resize",
@@ -164,7 +171,7 @@ function buildDay7Insight(input: {
             "Оставить только первый короткий элемент действия и отдельно оценить его результат.",
         };
   } else if (openLoop) {
-    workingHypothesis = `По «${openLoop.skill_title}» нельзя сделать вывод: действие сохранено, но фактический outcome неизвестен.`;
+    workingHypothesis = `По «${openLoop.skill_title}» нельзя сделать вывод: действие сохранено, но фактический результат неизвестен.`;
     nextExperiment = {
       kind: "close_loop",
       title: `Закрыть результат «${openLoop.skill_title}»`,
@@ -173,7 +180,7 @@ function buildDay7Insight(input: {
     };
   } else if (input.outcomesRecorded > 0) {
     workingHypothesis =
-      "За неделю outcomes сохранены, но ни один навык ещё не получил устойчивого полезного сигнала.";
+      "За неделю результаты сохранены, но ни один навык ещё не получил устойчивого полезного сигнала.";
   }
 
   return {
@@ -188,6 +195,7 @@ export function buildRecap(
   plans: RecapAttempt[],
   eventDays: number[] = [],
   startedAt?: string,
+  preferences: CommunicationPreferences = {},
 ) {
   const scopedPlans = firstWeekPlans(plans, startedAt);
   const attempted = scopedPlans.filter(
@@ -215,20 +223,29 @@ export function buildRecap(
 
   const facts = scopedPlans.map((plan) => {
     if (plan.result === null) {
+      if (plan.reported_result) return `«${plan.skill_title}»: ${recapResult(plan.reported_result)}; польза пока не оценена.`;
       return plan.attempt_id
         ? `«${plan.skill_title}»: попытка начата; итог не отмечен.`
         : `«${plan.skill_title}»: действие предложено; неизвестно, была ли попытка.`;
     }
     const helpfulness =
-      plan.helpfulness === null
+      plan.worsened ? "после практики стало хуже" : plan.helpfulness === null
         ? "полезность не оценена"
         : `полезность ${plan.helpfulness}/10`;
     return `«${plan.skill_title}»: ${recapResult(plan.result)}; ${helpfulness}.`;
+  }).map((fact, index) => {
+    const plan = scopedPlans[index];
+    if ((plan.result ?? plan.reported_result) !== "partial") return fact;
+    const details = [
+      plan.completed_part?.trim() ? `${systemPrompt(preferences, "recapCompleted")} «${plan.completed_part}».` : "",
+      plan.stopping_point?.trim() ? `Остановились: «${plan.stopping_point}».` : "",
+    ].filter(Boolean).join(" ");
+    return details ? `${fact} ${details}` : fact;
   });
 
   const unknown = unique([
     ...unresolved.map(
-      (plan) => `Для «${plan.skill_title}» результат пока неизвестен.`,
+      (plan) => plan.reported_result ? `Для «${plan.skill_title}» польза пока не оценена.` : `Для «${plan.skill_title}» результат пока неизвестен.`,
     ),
     ...missingHelpfulness.map(
       (plan) => `Для «${plan.skill_title}» полезность не оценена.`,
@@ -275,6 +292,7 @@ export function buildRecap(
       unresolved,
       repeated,
       outcomesRecorded: outcomes.length,
+      preferences,
     }),
   };
 }

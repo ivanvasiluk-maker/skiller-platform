@@ -1,12 +1,21 @@
 "use client";
+import { systemPrompt, type CommunicationPreferences } from "@/lib/communication-preferences";
+import { displaySkillSteps } from "@/lib/skill-instruction-copy";
 import Link from "next/link";
+import { QuickStop } from "./quick-stop";
+import { StopExample } from "./stop-example";
+import { GroundingExample } from "./grounding-example";
+import { SkillExample } from "./skill-example";
+import { MicroStartExample } from "./micro-start-example";
+import { PracticeDirection } from "./practice-direction";
 import { useEffect, useRef, useState } from "react";
 import { ArrowUpRight, ArrowLeft, Check, MessageCircle, Mic, MicOff, Play, Settings2, Sparkles, X } from "lucide-react";
 import { trainers, interactionModes, type TrainerId, type EntryMode } from "@/lib/trainers";
-import type { TrainerState, TrainerPlan } from "@/lib/trainer-data";
+import type { TrainerState, TrainerPlan, TrainerMessage } from "@/lib/trainer-data";
 import { explainDecisionReason } from "@/lib/trainer-continuity";
 import { meaningfulVoiceTranscript } from "@/lib/voice-transcript";
 import type { SkillView } from "@/lib/skiller-data";
+import { draftKey, readDraft } from "@/lib/trainer-draft";
 import "./trainer.css";
 
 const entries: { id: EntryMode; title: string; copy: string; mark: string }[] = [
@@ -18,36 +27,43 @@ const entries: { id: EntryMode; title: string; copy: string; mark: string }[] = 
 const trainerIntroductions: Record<TrainerId, { label: string; quote: string; method: string; fit: string }> = {
   marsha: {
     label: "Бережная опора",
-    quote: "Похоже, сейчас и так много давления. Давай не требовать от себя всего сразу и найдём один шаг, который по силам.",
-    method: "DBT/CFT: сначала помогает вернуть опору, затем мягко переводит к действию.",
+    quote: "Похоже, сейчас и так много давления. Давайте не требовать от себя всего сразу и найдём один шаг, который по силам.",
+    method: "Навыки принятия и работы с эмоциями: сначала помогает вернуть опору, затем перейти к действию.",
     fit: "Когда важно, чтобы рядом было тепло, спокойно и без стыда.",
   },
   beck: {
     label: "Спокойный анализ",
     quote: "Отделим то, что произошло, от того, что Вы об этом подумали. Какой маленький эксперимент может проверить эту мысль?",
-    method: "CBT и функциональный анализ: разбирает факты и гипотезы, предлагает проверяемый эксперимент.",
+    method: "Когнитивно-поведенческий подход: помогает отделить факты от предположений и проверить небольшой шаг.",
     fit: "Когда хочется понять закономерность и принимать решения яснее.",
   },
   skinny: {
     label: "Импульс к действию",
     quote: "Всю задачу сегодня не тащим. Что можно сделать за две минуты, чтобы остался видимый результат?",
-    method: "Поведенческая активация и ADHD-навыки: превращает намерение в конкретный микро-старт.",
+    method: "Помогает начать дело с маленького действия и справиться с отвлечениями.",
     fit: "Когда всё понятно, но сложно начать или не отвлечься.",
   },
 };
 export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   const [state, setState] = useState(initialState);
+  const [olderMessages, setOlderMessages] = useState<TrainerMessage[]>([]);
+  const [visibleMessageCount, setVisibleMessageCount] = useState(8);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [historyHasMore, setHistoryHasMore] = useState<boolean | null>(null);
   const [screen, setScreen] = useState<"home" | "conversation" | "trainers" | "journal" | "recap">("home");
   const [mode, setMode] = useState<EntryMode>("stuck");
+  const [choosingNewSituation, setChoosingNewSituation] = useState(false);
   const [settings, setSettings] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [name, setName] = useState("");
   const [trainerId, setTrainerId] = useState<TrainerId>("marsha");
-  const [step, setStep] = useState(0);
+  const [step, setStep] = useState(-1);
   const [consent, setConsent] = useState(false);
   const [text, setText] = useState("");
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftStorageUnavailable, setDraftStorageUnavailable] = useState(false);
   const [intensity, setIntensity] = useState(5);
   const [risk, setRisk] = useState("unknown");
   const [kind, setKind] = useState("stuck");
@@ -66,10 +82,35 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   const voiceStreamRef = useRef<MediaStream | null>(null);
   const profile = state.profile;
   const trainer = trainers[profile?.trainer_id ?? trainerId];
-  const pending = state.plans.find(p => !p.result);
+  const pending = state.plans.find(p => !p.result && !p.paused);
   const latest = state.plans.find(p => p.result);
   const openLoop = state.continuity.openLoop;
   const analysisPending = Boolean(state.pendingFollowUp || state.pendingSituationAnalysis);
+  const sendDisabled = busy || recording || text.trim().length < 3 || (!analysisPending && mode !== "talk" && risk === "unknown") || (!analysisPending && mode !== "talk" && Boolean(pending));
+  // Bind a draft to the latest server question, including questions within one stage.
+  const draftContext = JSON.stringify([state.pendingSituationAnalysis?.id ?? null, state.pendingSituationAnalysis?.stage ?? null, state.pendingFollowUp?.id ?? null, pending?.id ?? null, pending?.reported_result ?? null, state.messages.at(-1)?.id ?? null]);
+  const initialDraftContext = useRef(draftContext);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      if (!initialState.profile) { setDraftReady(true); return; }
+      try {
+        const key = draftKey(initialState.profile.user_id);
+        const draft = readDraft(localStorage.getItem(key), initialDraftContext.current);
+        if (draft) { setText(draft.text); setMode(draft.mode); setScreen("conversation"); }
+        else localStorage.removeItem(key);
+      } catch { setDraftStorageUnavailable(true); }
+      setDraftReady(true);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [initialState.profile]);
+  useEffect(() => {
+    if (!draftReady || !profile) return;
+    try {
+      const key = draftKey(profile.user_id);
+      if (text.trim()) localStorage.setItem(key, JSON.stringify({ version: 1, context: draftContext, text, mode, updatedAt: Date.now() }));
+      else localStorage.removeItem(key);
+    } catch { queueMicrotask(() => setDraftStorageUnavailable(true)); }
+  }, [draftReady, profile, draftContext, text, mode]);
   const day2CheckIn = state.continuity.day2CheckIn;
   const days4to6 = state.continuity.days4to6;
   const gapReturn = state.continuity.gapReturn;
@@ -84,6 +125,8 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
       const response = await fetch("/api/trainer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...payload, requestId: crypto.randomUUID(), sessionId: sessionRef.current }), signal: AbortSignal.timeout(25000) });
       const result = await response.json() as TrainerState & { error?: string };
       if (!response.ok) throw new Error(result.error || "Не удалось сохранить");
+      if (result.messages.at(-1)?.id !== state.messages.at(-1)?.id) setText("");
+      setOlderMessages(previous => [...previous, ...state.messages.filter(message => !result.messages.some(current => current.id === message.id) && !previous.some(older => older.id === message.id))]);
       setState(result); return result;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось сохранить. Попробуйте обновить данные.");
@@ -96,18 +139,64 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
     if (node) node.scrollTop = node.scrollHeight;
   }, [state.messages.length, busy, screen]);
   useEffect(() => {
-    sessionRef.current = sessionStorage.getItem("skiller-session") || crypto.randomUUID();
-    sessionStorage.setItem("skiller-session", sessionRef.current);
-    if (initialState.profile) void command({ action: "open" });
+    try {
+      sessionRef.current = sessionStorage.getItem("skiller-session") || crypto.randomUUID();
+      sessionStorage.setItem("skiller-session", sessionRef.current);
+    } catch { sessionRef.current = crypto.randomUUID(); }
+    const openFrame = requestAnimationFrame(() => { if (initialState.profile) void command({ action: "open" }); });
+    return () => cancelAnimationFrame(openFrame);
     // Log once per browser session; backend deduplicates the event.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   async function refresh() {
-    try { const response = await fetch("/api/trainer", { cache: "no-store" }); if (!response.ok) throw new Error(); setState(await response.json()); setError(""); }
+    try { const response = await fetch("/api/trainer", { cache: "no-store" }); if (!response.ok) throw new Error(); const result = await response.json() as TrainerState; setOlderMessages(previous => [...previous, ...state.messages.filter(message => !result.messages.some(current => current.id === message.id) && !previous.some(older => older.id === message.id))]); setState(result); setError(""); }
     catch { setError("Сервер недоступен. Попробуйте ещё раз позже."); }
   }
   function enter(value: EntryMode, depth: "simple" | "complex" = "simple") { setMode(value); setKind(value === "distress" ? "emotion" : "stuck"); setRisk("unknown"); setAnalysisDepth(depth); setScreen("conversation"); }
+  function continueSituation() {
+    setChoosingNewSituation(false);
+    setMode(state.pendingSituationAnalysis?.mode ?? (pending?.entry_mode as EntryMode | undefined) ?? "talk");
+    setScreen("conversation");
+  }
+  async function startNewSituation() {
+    const result = await command({ action: "newSituation", ...(state.pendingSituationAnalysis ? { analysisId: state.pendingSituationAnalysis.id } : {}) });
+    if (!result) return;
+    setText(""); setChoosingNewSituation(false);
+    enter("stuck");
+    requestAnimationFrame(() => composerRef.current?.focus());
+  }
+  const combinedMessages = [...olderMessages.filter(message => !state.messages.some(current => current.id === message.id)), ...state.messages];
+  async function showEarlierMessages() {
+    if (historyBusy) return;
+    const node = messagesRef.current;
+    const anchor = node?.querySelector<HTMLElement>("[data-message-id]");
+    const oldTop = anchor?.getBoundingClientRect().top;
+    const preservePosition = () => requestAnimationFrame(() => {
+      if (!anchor || oldTop === undefined) return;
+      const difference = anchor.getBoundingClientRect().top - oldTop;
+      if (node && node.scrollHeight > node.clientHeight) node.scrollTop += difference;
+      else window.scrollBy(0, difference);
+    });
+    if (visibleMessageCount < combinedMessages.length) {
+      setVisibleMessageCount(count => Math.min(count + 10, combinedMessages.length));
+      preservePosition(); return;
+    }
+    const before = combinedMessages[0]?.id;
+    if (!before) return;
+    setHistoryBusy(true); setError("");
+    try {
+      const response = await fetch(`/api/trainer?before=${encodeURIComponent(before)}`, { cache: "no-store" });
+      if (!response.ok) throw new Error("Не удалось загрузить историю. Попробуйте ещё раз.");
+      const page = await response.json() as { messages: TrainerMessage[]; hasEarlierMessages: boolean };
+      setOlderMessages(previous => [...page.messages, ...previous.filter(message => !page.messages.some(earlier => earlier.id === message.id))]);
+      setHistoryHasMore(page.hasEarlierMessages);
+      setVisibleMessageCount(count => count + page.messages.length);
+      preservePosition();
+    } catch (error) { setError(error instanceof Error ? error.message : "Не удалось загрузить историю."); }
+    finally { setHistoryBusy(false); }
+  }
   async function send() {
+    if (!draftReady || sendDisabled) return;
     const result = await command({ action: mode === "talk" || analysisPending ? "message" : "situation", text, mode, kind, signal, urge, intensity, risk, analysisDepth });
     if (result) setText("");
   }
@@ -216,9 +305,9 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
       return;
     }
     const plan = state.plans.find(item => item.id === loop.plan_id);
-    if (plan && !plan.attempt_id) await command({ action: "start", planId: loop.plan_id });
+    if (plan && !plan.attempt_id && !(await command({ action: "start", planId: loop.plan_id }))) return;
     const mapped = result === "done" ? "done" : result === "partial" ? "partial" : "failed";
-    await command({ action: "outcome", planId: loop.plan_id, result: mapped, helpfulness: result === "done" ? 8 : 4, intensity });
+    if (await command({ action: "performance", planId: loop.plan_id, result: mapped })) setScreen("conversation");
   }
   function writeAnotherOutcome() {
     setMode("talk");
@@ -236,70 +325,138 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   }
 
   return <div className="trainer-shell" style={{ "--trainer-color": trainer.color, "--trainer-bg": trainer.background } as React.CSSProperties}>
+    {profile && <section className="trainer-notice" aria-label="Выбор ситуации">
+      {choosingNewSituation ? <div><p>Оставить текущий разбор без результата и начать другой? Его сообщения сохранятся. Неотправленный черновик будет удалён.</p><div className="trainer-actions"><button className="trainer-secondary" disabled={busy || recording} onClick={continueSituation}>Продолжить текущий разбор</button><button className="trainer-primary" disabled={busy || recording} onClick={() => void startNewSituation()}>Начать другую ситуацию</button></div></div> : <div className="trainer-actions">
+        <button className="trainer-secondary" disabled={busy || recording} onClick={continueSituation}>Продолжить</button>
+        <button className="trainer-secondary" disabled={busy || recording || Boolean(profile.safety_flag) || Boolean(pending) || Boolean(state.pendingFollowUp)} onClick={() => { setScreen("conversation"); setChoosingNewSituation(true); }}>Новая ситуация</button>
+        {(pending || state.pendingFollowUp) && <p>Новый разбор будет доступен после результата текущей практики и его обсуждения.</p>}
+      </div>}
+    </section>}
+    {profile && state.plans.some(plan => plan.paused && !plan.result) && <section className="trainer-notice" aria-label="Практики на паузе"><div><strong>Можно вернуться позже</strong>{state.plans.filter(plan => plan.paused && !plan.result).map(plan => <div key={plan.id}><p>{state.openLoops.find(loop => loop.plan_id === plan.id)?.planned_action ?? plan.skill_title}{plan.reported_result ? " — выполнение уже отмечено" : " — результат пока не отмечен"}</p><button className="trainer-secondary" disabled={busy || recording || Boolean(pending) || analysisPending || Boolean(profile.safety_flag)} onClick={async () => { if (await command({ action: "resume", planId: plan.id })) { setMode(plan.entry_mode as EntryMode); setScreen("conversation"); } }}>Вернуться к этому шагу</button></div>)}</div></section>}
+    <QuickStop
+      disabled={busy}
+      onPrepare={profile && !pending && !analysisPending && !profile.safety_flag ? async input => {
+        const result = await command({ action: "quickStop", ...input });
+        if (!result) return false;
+        setMode("distress"); setScreen("conversation"); return true;
+      } : undefined}
+      practiceLabel={pending ? "Вернуться к своей практике" : "Разобрать свою ситуацию с тренером"}
+      onPractice={profile ? () => {
+        // A quick reference never creates an attempt or replaces an open plan.
+        if (pending) { setMode(pending.entry_mode as EntryMode); setScreen("conversation"); }
+        else enter("distress");
+      } : undefined}
+    />
     <header className="trainer-header"><Link className="trainer-logo" href="/">skiller<span>●</span></Link><span className="trainer-header-note">маленькие действия · реальные изменения</span>{profile && <button className="trainer-icon-button" aria-label="Настройки тренера" onClick={() => setSettings(!settings)}><Settings2 size={21}/></button>}</header>
     {error && <div className="trainer-error" role="alert">{error}<button onClick={refresh}>Обновить данные</button></div>}
     {notice && <div className="trainer-notice" role="status">{notice}<button aria-label="Закрыть уведомление" onClick={() => setNotice("")}><X size={16}/></button></div>}
     {!profile ? <main className="trainer-onboarding">
-      <span className="trainer-kicker">ЗНАКОМСТВО / {step + 1} ИЗ 3</span>
-      {step === 0 && <><h1>Начнём с Вас.</h1><p className="trainer-lead">Не нужно менять всё сразу.<br/>Найдём один шаг, который сейчас по силам.</p><label className="trainer-label" htmlFor="your-name">Как к Вам обращаться?</label><input id="your-name" className="trainer-input" autoComplete="given-name" maxLength={60} value={name} onChange={e => setName(e.target.value)} placeholder="Ваше имя"/><button className="trainer-primary" disabled={!name.trim()} onClick={() => setStep(1)}>Познакомиться с тренерами <ArrowUpRight size={18}/></button><p className="trainer-caption">SKILLER — AI-тренировка навыков, не психотерапия и не экстренная помощь.</p></>}
-      {step === 1 && <section className="trainer-meet"><div className="trainer-meet-heading"><div><h1>С кем тебе по пути?</h1><p className="trainer-lead">У каждого свой характер, но правила одни: без оценок личности, давления и пустых обещаний.</p></div><span className="trainer-meet-note">Тренера можно сменить позже.<br/>Прогресс сохранится.</span></div><div className="trainer-intro-grid" role="radiogroup" aria-label="Выберите AI-тренера">{Object.entries(trainers).map(([id, item]) => { const typedId = id as TrainerId; const intro = trainerIntroductions[typedId]; const selected = trainerId === typedId; return <button key={id} type="button" role="radio" aria-checked={selected} onClick={() => setTrainerId(typedId)} className={`trainer-intro-card ${selected ? "selected" : ""}`} style={{ "--card-color": item.color, "--card-bg": item.background } as React.CSSProperties}><span className="trainer-intro-top"><span className="trainer-intro-label">{intro.label}</span>{selected && <span className="trainer-selected-mark"><Check size={14}/> Выбран</span>}</span><span className="trainer-intro-portrait" aria-hidden="true"><span>{item.symbol}</span></span><strong>{item.name}</strong><small>{item.title}</small><span className="trainer-intro-copy">{item.description}</span></button>; })}</div><section className="trainer-voice-preview" style={{ "--preview-color": trainer.color, "--preview-bg": trainer.background } as React.CSSProperties} aria-live="polite"><div className="trainer-voice-person"><span className="trainer-avatar small" style={{ background: trainer.background, color: trainer.color }}>{trainer.symbol}</span><span><small>КАК ЭТО ЗВУЧИТ</small><strong>{trainer.name}</strong></span></div><blockquote>«{trainerIntroductions[trainerId].quote}»</blockquote><div className="trainer-voice-details"><p><strong>Как работает</strong>{trainerIntroductions[trainerId].method}</p><p><strong>Подойдёт, если</strong>{trainerIntroductions[trainerId].fit}</p></div></section><div className="trainer-actions trainer-meet-actions"><button className="trainer-secondary" onClick={() => setStep(0)}><ArrowLeft size={17}/> Назад</button><button className="trainer-primary" onClick={() => setStep(2)}>Продолжить с {trainer.name === "Марша" ? "Маршей" : trainer.name === "Бек" ? "Беком" : "Скинни"} <ArrowUpRight size={18}/></button></div></section>}
-      {step === 2 && <><div className="trainer-avatar small">{trainer.symbol}</div><h1>{name}, привет.</h1><p className="trainer-lead">{trainer.greeting}</p><label className="trainer-label" htmlFor="first-story">Что сейчас реально мешает?</label><textarea id="first-story" className="trainer-input" rows={4} maxLength={1200} value={text} onChange={e => setText(e.target.value)} placeholder="Например: весь день откладываю начало отчёта и открываю новости."/><label className="trainer-consent"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)}/><span>Согласен на сохранение ситуаций и результатов в моём профиле и обработку сообщений AI. Для пилота используются обезличенные события, без текста разговоров. Понимаю границы самостоятельной практики.</span></label><div className="trainer-actions"><button className="trainer-secondary" onClick={() => setStep(1)}>Назад</button><button className="trainer-primary" disabled={busy || !consent || text.trim().length < 5} onClick={onboard}>{busy ? "Сохраняем…" : "Начать знакомство"}<ArrowUpRight size={18}/></button></div></>}
+      {step === -1 && <PracticeDirection onStart={() => setStep(0)} />}
+      {step >= 0 && <span className="trainer-kicker">ЗНАКОМСТВО / {step + 1} ИЗ 3</span>}
+      {step === 0 && <><h1>Начнём с Вас.</h1><p className="trainer-lead">Не нужно менять всё сразу.<br/>Найдём один шаг, который сейчас по силам.</p><label className="trainer-label" htmlFor="your-name">Как к Вам обращаться?</label><input id="your-name" className="trainer-input" autoComplete="given-name" maxLength={60} value={name} onChange={e => setName(e.target.value)} placeholder="Ваше имя"/><button className="trainer-primary" disabled={!name.trim()} onClick={() => setStep(1)}>Познакомиться с тренерами <ArrowUpRight size={18}/></button><p className="trainer-caption">SKILLER помогает тренировать навыки с помощью искусственного интеллекта. Это не психотерапия и не экстренная помощь.</p></>}
+      {step === 1 && <section className="trainer-meet"><div className="trainer-meet-heading"><div><h1>Какой помощник Вам подходит?</h1><p className="trainer-lead">У каждого свой характер, но правила одни: без оценок личности, давления и пустых обещаний.</p></div><span className="trainer-meet-note">Тренера можно сменить позже.<br/>Прогресс сохранится.</span></div><div className="trainer-intro-grid" role="radiogroup" aria-label="Выберите помощника">{Object.entries(trainers).map(([id, item]) => { const typedId = id as TrainerId; const intro = trainerIntroductions[typedId]; const selected = trainerId === typedId; return <button key={id} type="button" role="radio" aria-checked={selected} onClick={() => setTrainerId(typedId)} className={`trainer-intro-card ${selected ? "selected" : ""}`} style={{ "--card-color": item.color, "--card-bg": item.background } as React.CSSProperties}><span className="trainer-intro-top"><span className="trainer-intro-label">{intro.label}</span>{selected && <span className="trainer-selected-mark"><Check size={14}/> Выбран</span>}</span><span className="trainer-intro-portrait" aria-hidden="true"><span>{item.symbol}</span></span><strong>{item.name}</strong><small>{item.title}</small><span className="trainer-intro-copy">{item.description}</span></button>; })}</div><section className="trainer-voice-preview" style={{ "--preview-color": trainer.color, "--preview-bg": trainer.background } as React.CSSProperties} aria-live="polite"><div className="trainer-voice-person"><span className="trainer-avatar small" style={{ background: trainer.background, color: trainer.color }}>{trainer.symbol}</span><span><small>КАК ЭТО ЗВУЧИТ</small><strong>{trainer.name}</strong></span></div><blockquote>«{trainerIntroductions[trainerId].quote}»</blockquote><div className="trainer-voice-details"><p><strong>Как работает</strong>{trainerIntroductions[trainerId].method}</p><p><strong>Подойдёт, если</strong>{trainerIntroductions[trainerId].fit}</p></div></section><div className="trainer-actions trainer-meet-actions"><button className="trainer-secondary" onClick={() => setStep(0)}><ArrowLeft size={17}/> Назад</button><button className="trainer-primary" onClick={() => setStep(2)}>Продолжить с {trainer.name === "Марша" ? "Маршей" : trainer.name === "Бек" ? "Беком" : "Скинни"} <ArrowUpRight size={18}/></button></div></section>}
+      {step === 2 && <><div className="trainer-avatar small">{trainer.symbol}</div><h1>{name}, здравствуйте.</h1><p className="trainer-lead">{trainer.greeting}</p><label className="trainer-label" htmlFor="first-story">Какое дело Вы откладываете и что происходит вместо него?</label><textarea id="first-story" className="trainer-input" rows={4} maxLength={1200} value={text} onChange={e => setText(e.target.value)} placeholder="Например: весь день откладываю начало отчёта и открываю новости."/><label className="trainer-consent"><input type="checkbox" checked={consent} onChange={e => setConsent(e.target.checked)}/><span>Даю согласие на сохранение ситуаций и результатов в моём профиле и обработку сообщений искусственным интеллектом. Для пилота используются обезличенные события, без текста разговоров. Понимаю границы самостоятельной практики.</span></label><div className="trainer-actions"><button className="trainer-secondary" onClick={() => setStep(1)}>Назад</button><button className="trainer-primary" disabled={busy || !consent || text.trim().length < 5} onClick={onboard}>{busy ? "Сохраняем…" : "Начать знакомство"}<ArrowUpRight size={18}/></button></div></>}
     </main> : <>
       <nav className="trainer-nav" aria-label="Основная навигация"><button aria-current={screen === "home" ? "page" : undefined} onClick={() => setScreen("home")}>Мой тренер</button><button aria-current={screen === "conversation" ? "page" : undefined} onClick={() => enter("talk")}>Разговор</button><button aria-current={screen === "trainers" ? "page" : undefined} onClick={showTrainers}>Тренеры</button><button aria-current={screen === "journal" ? "page" : undefined} onClick={() => setScreen("journal")}>Моя неделя</button><span>День {state.day}</span></nav>
-      {settings && <section className="trainer-settings"><div className="trainer-row"><h2>Как будем общаться?</h2><button className="trainer-icon-button" aria-label="Закрыть настройки" onClick={() => setSettings(false)}><X/></button></div><p>Прогресс и память сохраняются при смене тренера.</p><button className="trainer-secondary" onClick={showTrainers}>Познакомиться с тренерами</button><div className="trainer-actions">{Object.entries(interactionModes).map(([id, label]) => <button disabled={busy} aria-pressed={profile.interaction_mode === id} className="trainer-secondary" key={id} onClick={() => command({ action: "settings", interactionMode: id })}>{label}</button>)}</div></section>}
+      {settings && <section className="trainer-settings"><div className="trainer-row"><h2>Как будем общаться?</h2><button className="trainer-icon-button" aria-label="Закрыть настройки" onClick={() => setSettings(false)}><X/></button></div><p>Прогресс и память сохраняются при смене тренера.</p><button className="trainer-secondary" onClick={showTrainers}>Познакомиться с тренерами</button><div className="trainer-actions">{Object.entries(interactionModes).map(([id, label]) => <button disabled={busy} aria-pressed={profile.interaction_mode === id} className="trainer-secondary" key={id} onClick={() => command({ action: "settings", interactionMode: id })}>{label}</button>)}</div><h3>Обращение в разговоре</h3><p>Настройка действует в свободном разговоре и части вопросов о практике. Карточки и остальные вопросы пока используют «Вы».</p><div className="trainer-actions" role="group" aria-label="Обращение">{([['formal', 'Вы'], ['informal', 'ты']] as const).map(([id, label]) => <button key={id} disabled={busy} aria-pressed={(profile.address_form ?? 'formal') === id} className="trainer-secondary" onClick={() => command({ action: "settings", addressForm: id })}>{label}</button>)}</div><div className="trainer-actions" role="group" aria-label="Род обращения">{([['neutral', 'Нейтрально'], ['masculine', 'Мужской род'], ['feminine', 'Женский род']] as const).map(([id, label]) => <button key={id} disabled={busy} aria-pressed={(profile.grammatical_gender ?? 'neutral') === id} className="trainer-secondary" onClick={() => command({ action: "settings", grammaticalGender: id })}>{label}</button>)}</div><p>В нейтральном варианте помощник избегает слов, указывающих на пол.</p></section>}
       <main className="trainer-main">
-        {screen === "home" && <><div className="trainer-home-heading"><span className="trainer-kicker">ТВОЁ МЕСТО ДЛЯ ПРАКТИКИ</span><span className="trainer-day">НЕДЕЛЯ С ТРЕНЕРОМ · {Math.min(state.day, 7)}/7</span></div><section className="trainer-hero"><div><span className="trainer-kicker">{trainer.name.toUpperCase()} · ТВОЙ AI-ТРЕНЕР</span><h1>{profile.name},<br/>{state.plans.length ? "продолжим?" : "давай начнём."}</h1><p>{latest ? `В прошлый раз: «${latest.skill_title}» — ${latest.result === "failed" ? "не получилось" : latest.result === "more" ? "сделано больше" : "получилось"}. ${trainer.return}` : trainer.greeting}</p><button className="trainer-primary" onClick={() => enter(pending ? pending.entry_mode as EntryMode : "stuck")}>{pending ? "Продолжить практику" : "Найти первый шаг"}<ArrowUpRight size={20}/></button></div><div className="trainer-portrait" aria-label={trainer.name}><div className="trainer-orbit"/><div className="trainer-avatar">{trainer.symbol}</div><span>{trainer.name}</span><small>{trainer.title}</small></div></section>{gapReturn ? <section className="trainer-panel"><span className="trainer-kicker">ВОЗВРАЩЕНИЕ БЕЗ СБРОСА</span><h2>{gapReturn.skillTitle ?? "Продолжим с текущей точки"}</h2><p>{gapReturn.prompt}</p><button className="trainer-primary" onClick={resumeAfterGap}>{gapReturn.actionLabel}<ArrowUpRight size={17}/></button></section> : day2CheckIn ? <section className="trainer-panel"><span className="trainer-kicker">ДЕНЬ 2 · ПРОВЕРЯЕМ ФАКТ</span><h2>{day2CheckIn.skillTitle}</h2><p>{day2CheckIn.prompt}</p><button className="trainer-primary" onClick={resumeDay2CheckIn}>{day2CheckIn.actionLabel}<ArrowUpRight size={17}/></button></section> : days4to6 ? <section className="trainer-panel"><span className="trainer-kicker">ДЕНЬ {state.day} · СЛЕДУЮЩИЙ ЭКСПЕРИМЕНТ</span><h2>{days4to6.skillTitle}</h2><p>{days4to6.prompt}</p><p className="trainer-decision-reason"><strong>Почему такой шаг</strong><span>{days4to6.reasonExplanation}</span></p><button className="trainer-primary" onClick={startDays4to6Step}>{days4to6.actionLabel}<ArrowUpRight size={17}/></button></section> : openLoop && <section className="trainer-panel"><span className="trainer-kicker">ПРОДОЛЖАЕМ С СОХРАНЁННОГО МЕСТА</span><h2>{openLoop.skillTitle}</h2><p>{openLoop.prompt}</p><button className="trainer-primary" onClick={resumeOpenLoop}>{openLoop.actionLabel}<ArrowUpRight size={17}/></button></section>}<div className="trainer-section-title"><h2>Что тебе сейчас нужно?</h2><span>Любая точка — подходящее начало</span></div><div className="trainer-entry-grid">{entries.map(entry => <button key={entry.id} className="trainer-entry" onClick={() => enter(entry.id)}><span className="trainer-entry-mark">{entry.mark}</span><strong>{entry.title}</strong><p>{entry.copy}</p><ArrowUpRight size={19}/></button>)}</div><section className="trainer-week-strip"><div><span className="trainer-kicker">ТВОЯ НЕДЕЛЯ</span><p>Возвращаться можно без идеального графика.</p></div><div className="trainer-days">{[1, 2, 3, 4, 5, 6, 7].map(d => <span key={d} className={state.engagedDays.includes(d) ? "engaged" : ""} title={`День ${d}${state.engagedDays.includes(d) ? ": было взаимодействие" : ""}`}>{state.engagedDays.includes(d) ? <Check size={15}/> : d}</span>)}</div>{state.day >= 3 && <button className="trainer-link" onClick={showRecap}>Посмотреть итог <ArrowUpRight size={16}/></button>}</section></>}
-        {screen === "trainers" && <section className="trainer-meet"><div className="trainer-meet-heading"><div><span className="trainer-kicker">ВЫБОР AI-ТРЕНЕРА</span><h1>С кем тебе по пути?</h1><p className="trainer-lead">Послушай голос каждого и выбери характер, с которым хочется продолжить.</p></div><span className="trainer-meet-note">Прогресс и память сохранятся<br/>при смене тренера.</span></div><div className="trainer-intro-grid" role="radiogroup" aria-label="Выберите AI-тренера">{Object.entries(trainers).map(([id, item]) => { const typedId = id as TrainerId; const intro = trainerIntroductions[typedId]; const selected = trainerId === typedId; return <button key={id} type="button" role="radio" aria-checked={selected} onClick={() => setTrainerId(typedId)} className={`trainer-intro-card ${selected ? "selected" : ""}`} style={{ "--card-color": item.color, "--card-bg": item.background } as React.CSSProperties}><span className="trainer-intro-top"><span className="trainer-intro-label">{intro.label}</span>{selected && <span className="trainer-selected-mark"><Check size={14}/> Выбран</span>}</span><span className="trainer-intro-portrait" aria-hidden="true"><span>{item.symbol}</span></span><strong>{item.name}</strong><small>{item.title}</small><span className="trainer-intro-copy">{item.description}</span></button>; })}</div><section className="trainer-voice-preview" style={{ "--preview-color": trainers[trainerId].color, "--preview-bg": trainers[trainerId].background } as React.CSSProperties} aria-live="polite"><div className="trainer-voice-person"><span className="trainer-avatar small" style={{ background: trainers[trainerId].background, color: trainers[trainerId].color }}>{trainers[trainerId].symbol}</span><span><small>КАК ЭТО ЗВУЧИТ</small><strong>{trainers[trainerId].name}</strong></span></div><blockquote>«{trainerIntroductions[trainerId].quote}»</blockquote><div className="trainer-voice-details"><p><strong>Как работает</strong>{trainerIntroductions[trainerId].method}</p><p><strong>Подойдёт, если</strong>{trainerIntroductions[trainerId].fit}</p></div></section><div className="trainer-actions trainer-meet-actions"><button className="trainer-secondary" onClick={() => setScreen("home")}><ArrowLeft size={17}/> Назад</button><button className="trainer-primary" disabled={busy || trainerId === profile.trainer_id} onClick={saveTrainer}>{busy ? "Сохраняем…" : trainerId === profile.trainer_id ? `${trainers[trainerId].name} уже выбран` : `Выбрать: ${trainers[trainerId].name}`}<ArrowUpRight size={18}/></button></div></section>}
-        {screen === "conversation" && <><button className="trainer-link" onClick={() => setScreen("home")}><ArrowLeft size={16}/> К тренеру</button><div className="trainer-conversation-title"><div className="trainer-avatar small">{trainer.symbol}</div><div><h1>{mode === "talk" ? "Просто поговорим" : entries.find(e => e.id === mode)?.title}</h1><p>{trainer.name} · {interactionModes[profile.interaction_mode]} · <span className="trainer-online"><span className="trainer-online-dot" aria-hidden="true"/>на связи</span></p></div><span className="trainer-today">Сегодня · День {state.day}</span></div>
-        {state.dueLoop && <section className="trainer-followup"><span className="trainer-kicker">ПРОДОЛЖАЕМ ВЧЕРАШНЕЕ</span><p>Возвращаюсь к нашей договорённости: «{state.dueLoop.planned_action}». Как получилось по факту?</p><div className="trainer-quickreplies" role="group" aria-label="Быстрый ответ о результате">{[["done","Получилось"],["partial","Частично"],["not_done","Не получилось"],["skill_rejected","Шаг не подошёл"]].map(([r,label]) => <button key={r} type="button" className="trainer-chip" disabled={busy} onClick={() => void answerOutcome(r as string)}>{label}</button>)}<button type="button" className="trainer-chip" disabled={busy} onClick={writeAnotherOutcome}>Другой ответ</button></div></section>}
+        {screen === "home" && <><div className="trainer-home-heading"><span className="trainer-kicker">ТВОЁ МЕСТО ДЛЯ ПРАКТИКИ</span><span className="trainer-day">НЕДЕЛЯ С ТРЕНЕРОМ · {Math.min(state.day, 7)}/7</span></div><section className="trainer-hero"><div><span className="trainer-kicker">{trainer.name.toUpperCase()} · ВАШ ПОМОЩНИК</span><h1>{profile.name},<br/>{state.plans.length ? "продолжим?" : "давайте начнём."}</h1><p>{latest ? `В прошлый раз: «${latest.skill_title}» — ${latest.result === "partial" ? "частично" : latest.result === "failed" ? "не получилось" : latest.result === "more" ? "сделано больше" : "получилось"}. ${latest.worsened ? "После практики стало хуже; это сохранено отдельно. Пока сделаем паузу." : trainer.return}` : trainer.greeting}</p><button className="trainer-primary" onClick={() => enter(pending ? pending.entry_mode as EntryMode : "stuck")}>{pending ? "Продолжить практику" : "Найти первый шаг"}<ArrowUpRight size={20}/></button></div><div className="trainer-portrait" aria-label={trainer.name}><div className="trainer-orbit"/><div className="trainer-avatar">{trainer.symbol}</div><span>{trainer.name}</span><small>{trainer.title}</small></div></section>{gapReturn ? <section className="trainer-panel"><span className="trainer-kicker">ВОЗВРАЩЕНИЕ БЕЗ СБРОСА</span><h2>{gapReturn.skillTitle ?? "Продолжим с текущей точки"}</h2><p>{gapReturn.prompt}</p><button className="trainer-primary" onClick={resumeAfterGap}>{gapReturn.actionLabel}<ArrowUpRight size={17}/></button></section> : day2CheckIn ? <section className="trainer-panel"><span className="trainer-kicker">ДЕНЬ 2 · ПРОВЕРЯЕМ ФАКТ</span><h2>{day2CheckIn.skillTitle}</h2><p>{day2CheckIn.prompt}</p><button className="trainer-primary" onClick={resumeDay2CheckIn}>{day2CheckIn.actionLabel}<ArrowUpRight size={17}/></button></section> : days4to6 ? <section className="trainer-panel"><span className="trainer-kicker">ДЕНЬ {state.day} · СЛЕДУЮЩИЙ ЭКСПЕРИМЕНТ</span><h2>{days4to6.skillTitle}</h2><p>{days4to6.prompt}</p><p className="trainer-decision-reason"><strong>Почему такой шаг</strong><span>{days4to6.reasonExplanation}</span></p><button className="trainer-primary" onClick={startDays4to6Step}>{days4to6.actionLabel}<ArrowUpRight size={17}/></button></section> : openLoop && <section className="trainer-panel"><span className="trainer-kicker">ПРОДОЛЖАЕМ С СОХРАНЁННОГО МЕСТА</span><h2>{openLoop.skillTitle}</h2><p>{openLoop.prompt}</p><button className="trainer-primary" onClick={resumeOpenLoop}>{openLoop.actionLabel}<ArrowUpRight size={17}/></button></section>}<div className="trainer-section-title"><h2>Что Вам сейчас нужно?</h2><span>Любая точка — подходящее начало</span></div><div className="trainer-entry-grid">{entries.map(entry => <button key={entry.id} className="trainer-entry" onClick={() => enter(entry.id)}><span className="trainer-entry-mark">{entry.mark}</span><strong>{entry.title}</strong><p>{entry.copy}</p><ArrowUpRight size={19}/></button>)}</div><section className="trainer-week-strip"><div><span className="trainer-kicker">ВАША НЕДЕЛЯ</span><p>Возвращаться можно без идеального графика.</p></div><div className="trainer-days">{[1, 2, 3, 4, 5, 6, 7].map(d => <span key={d} className={state.engagedDays.includes(d) ? "engaged" : ""} title={`День ${d}${state.engagedDays.includes(d) ? ": было взаимодействие" : ""}`}>{state.engagedDays.includes(d) ? <Check size={15}/> : d}</span>)}</div>{state.day >= 3 && <button className="trainer-link" onClick={showRecap}>Посмотреть итог <ArrowUpRight size={16}/></button>}</section></>}
+        {screen === "trainers" && <section className="trainer-meet"><div className="trainer-meet-heading"><div><span className="trainer-kicker">ВЫБОР ПОМОЩНИКА</span><h1>Какой помощник Вам подходит?</h1><p className="trainer-lead">Посмотрите примеры ответов каждого и выберите характер, с которым хочется продолжить.</p></div><span className="trainer-meet-note">Прогресс и память сохранятся<br/>при смене тренера.</span></div><div className="trainer-intro-grid" role="radiogroup" aria-label="Выберите помощника">{Object.entries(trainers).map(([id, item]) => { const typedId = id as TrainerId; const intro = trainerIntroductions[typedId]; const selected = trainerId === typedId; return <button key={id} type="button" role="radio" aria-checked={selected} onClick={() => setTrainerId(typedId)} className={`trainer-intro-card ${selected ? "selected" : ""}`} style={{ "--card-color": item.color, "--card-bg": item.background } as React.CSSProperties}><span className="trainer-intro-top"><span className="trainer-intro-label">{intro.label}</span>{selected && <span className="trainer-selected-mark"><Check size={14}/> Выбран</span>}</span><span className="trainer-intro-portrait" aria-hidden="true"><span>{item.symbol}</span></span><strong>{item.name}</strong><small>{item.title}</small><span className="trainer-intro-copy">{item.description}</span></button>; })}</div><section className="trainer-voice-preview" style={{ "--preview-color": trainers[trainerId].color, "--preview-bg": trainers[trainerId].background } as React.CSSProperties} aria-live="polite"><div className="trainer-voice-person"><span className="trainer-avatar small" style={{ background: trainers[trainerId].background, color: trainers[trainerId].color }}>{trainers[trainerId].symbol}</span><span><small>КАК ЭТО ЗВУЧИТ</small><strong>{trainers[trainerId].name}</strong></span></div><blockquote>«{trainerIntroductions[trainerId].quote}»</blockquote><div className="trainer-voice-details"><p><strong>Как работает</strong>{trainerIntroductions[trainerId].method}</p><p><strong>Подойдёт, если</strong>{trainerIntroductions[trainerId].fit}</p></div></section><div className="trainer-actions trainer-meet-actions"><button className="trainer-secondary" onClick={() => setScreen("home")}><ArrowLeft size={17}/> Назад</button><button className="trainer-primary" disabled={busy || trainerId === profile.trainer_id} onClick={saveTrainer}>{busy ? "Сохраняем…" : trainerId === profile.trainer_id ? `${trainers[trainerId].name} уже выбран` : `Выбрать: ${trainers[trainerId].name}`}<ArrowUpRight size={18}/></button></div></section>}
+        {screen === "conversation" && <><button className="trainer-link" onClick={() => setScreen("home")}><ArrowLeft size={16}/> К тренеру</button><div className="trainer-conversation-title"><div className="trainer-avatar small">{trainer.symbol}</div><div><h1>{mode === "talk" ? "Просто поговорим" : entries.find(e => e.id === mode)?.title}</h1><p>{trainer.name} · {interactionModes[profile.interaction_mode]} · <span className="trainer-online">автоматический помощник</span></p></div><span className="trainer-today">Сегодня · День {state.day}</span></div>
+        {state.dueLoop && !state.plans.find(plan => plan.id === state.dueLoop?.plan_id)?.reported_result && <section className="trainer-followup"><span className="trainer-kicker">ПРОДОЛЖАЕМ ВЧЕРАШНЕЕ</span><p>Возвращаюсь к нашей договорённости: «{state.dueLoop.planned_action}». Как получилось по факту?</p><div className="trainer-quickreplies" role="group" aria-label="Быстрый ответ о результате">{[["done","Получилось"],["partial","Частично"],["not_done","Не получилось"],["skill_rejected","Шаг не подошёл"]].map(([r,label]) => <button key={r} type="button" className="trainer-chip" disabled={busy} onClick={() => void answerOutcome(r as string)}>{label}</button>)}<button type="button" className="trainer-chip" disabled={busy} onClick={writeAnotherOutcome}>Другой ответ</button></div></section>}
         {state.contextualMemory && <aside className="trainer-memory-card" aria-label="Контекст из прошлого разговора"><span className="trainer-kicker">ВОЗМОЖНО, ЭТО СВЯЗАНО</span><p>В похожем разборе Вы описывали: «{state.contextualMemory.thought || state.contextualMemory.urge || state.contextualMemory.action}».</p><small>{state.contextualMemory.occurrence_count > 1 ? `Это встречалось в ${state.contextualMemory.occurrence_count} подтверждённых разборах.` : "Это было в одном подтверждённом разборе."} Сейчас проверим заново — это гипотеза, а не вывод о Вас.</small><div className="trainer-memory-actions"><button type="button" className="trainer-chip" disabled={busy} onClick={() => void confirmContextualMemory()}>Да, похоже на прошлый случай</button><button type="button" className="trainer-memory-dismiss" disabled={busy} onClick={() => void dismissContextualMemory()}>Это сейчас не подходит</button></div></aside>}
-        <div className="trainer-messages" ref={messagesRef} aria-live="polite">{state.messages.slice(-8).map(m => <div key={m.id} className={`trainer-message ${m.role}`}><small>{m.role === "user" ? profile.name : trainers[m.trainer_id].name}</small><p>{m.text}</p></div>)}{busy && <div className="trainer-message assistant" aria-live="polite"><small>{trainer.name}</small><p className="trainer-typing" aria-label="Тренер печатает"><span/><span/><span/></p></div>}</div>
+        {(visibleMessageCount < combinedMessages.length || (historyHasMore ?? state.hasEarlierMessages)) && <button type="button" className="trainer-secondary" disabled={historyBusy} onClick={() => void showEarlierMessages()}>{historyBusy ? "Загружаем историю…" : "Показать более ранние сообщения"}</button>}
+        <div className="trainer-messages" ref={messagesRef} aria-live="polite">{combinedMessages.slice(-visibleMessageCount).map(m => <div data-message-id={m.id} key={m.id} className={`trainer-message ${m.role}`}><small>{m.role === "user" ? profile.name : trainers[m.trainer_id].name}</small><p>{m.text}</p></div>)}{busy && <div className="trainer-message assistant" aria-live="polite"><small>{trainer.name}</small><p className="trainer-typing" aria-label="Тренер печатает"><span/><span/><span/></p></div>}</div>
           {(state.pendingSituationAnalysis?.stage === "confirm" || state.pendingSituationAnalysis?.stage === "chain_confirm") && <div className="trainer-quickreplies" role="group" aria-label="Ответ на рабочую гипотезу"><button type="button" className="trainer-chip" disabled={busy} onClick={() => void answerHypothesis("Да, похоже")}>{state.pendingSituationAnalysis.stage === "chain_confirm" ? "Цепочка верна" : "Да, похоже"}</button><button type="button" className="trainer-chip" disabled={busy} onClick={() => void answerHypothesis("Нет")}>{state.pendingSituationAnalysis.stage === "chain_confirm" ? "Исправить ещё одно звено" : "Нет, хочу поправить"}</button></div>}
           {state.pendingSituationAnalysis?.stage === "chain_edit_choose" && <div className="trainer-quickreplies" role="group" aria-label="Выберите звено цепочки для исправления">{["Событие", "Мысль или смысл", "Эмоции и тело", "Импульс", "Действие", "Последствия"].map(label => <button key={label} type="button" className="trainer-chip" disabled={busy} onClick={() => void answerHypothesis(label)}>{label}</button>)}</div>}
           {state.pendingSituationAnalysis?.stage === "chain_choose" && <div className="trainer-quickreplies" role="group" aria-label="Выберите точку для тренировки">{["Мысль и интерпретация", "Тело и эмоция", "Импульс", "Конкретное действие"].map(label => <button key={label} type="button" className="trainer-chip" disabled={busy} onClick={() => void answerHypothesis(label)}>{label}</button>)}</div>}
           {Boolean(profile.safety_flag) ? <section className="trainer-safety"><h2>Сначала — безопасность</h2><p>Практика приостановлена. Если непосредственная опасность миновала, можно снова оценить состояние.</p><button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "safeAgain", risk: "no" })}>Сейчас нет риска причинить вред</button></section> : <>
-          {pending && <PlanCard key={pending.id} plan={pending} plannedAction={state.openLoops.find(loop => loop.plan_id === pending.id)?.planned_action} busy={busy} command={command}/>}
+          {pending && <PlanCard preferences={profile} key={pending.id} plan={pending} plannedAction={state.openLoops.find(loop => loop.plan_id === pending.id)?.planned_action} busy={busy} command={command} onPause={async () => { if (await command({ action: "pause", planId: pending.id })) setScreen("home"); }}/>}
           {!analysisPending && !pending && latest?.result === "failed" && <section className="trainer-panel"><h2>Изменим размер шага?</h2><p>{trainer.failure}</p><div className="trainer-actions"><button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "resize", planId: latest.id })}>Упростить до первого шага</button><button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "replace", planId: latest.id })}>Попробовать другой навык</button></div></section>}
-          <form className="trainer-composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="trainer-label" htmlFor="message">{analysisPending ? "Ваш ответ" : mode === "talk" ? "Что у Вас на уме?" : "Один конкретный эпизод"}</label><textarea ref={composerRef} id="message" rows={3} className="trainer-input" maxLength={1200} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }} placeholder={analysisPending ? "Ответьте своими словами или продиктуйте…" : "Можно написать или продиктовать сообщение…"}/>
+          <form className="trainer-composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="trainer-label" htmlFor="message">{analysisPending ? "Ваш ответ" : mode === "talk" ? "Что у Вас на уме?" : "Один конкретный эпизод"}</label><textarea ref={composerRef} id="message" rows={3} className="trainer-input" maxLength={1200} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} placeholder={analysisPending ? "Ответьте своими словами или продиктуйте…" : "Можно написать или продиктовать сообщение…"}/>
+          {text.trim() && <p className="trainer-draft-note">{draftStorageUnavailable ? "Сохранение черновика на устройстве недоступно. Скопируйте текст перед закрытием." : "Черновик хранится на этом устройстве. Восстановить его можно в течение 7 дней; он ещё не отправлен."} <button type="button" className="trainer-chip" disabled={busy || recording} onClick={() => setText("")}>Удалить черновик</button></p>}
           {mode !== "talk" && !analysisPending && <div className="trainer-capture"><label htmlFor="capture-kind">Ситуация<select id="capture-kind" value={kind} onChange={e => setKind(e.target.value)}><option value="stuck">Не могу начать</option><option value="emotion">Сильная эмоция</option><option value="conflict">Конфликт</option><option value="other">Другое</option></select></label><label htmlFor="capture-signal">Что первым замечаете?<select id="capture-signal" value={signal} onChange={e => setSignal(e.target.value)}><option value="thought">Мысль</option><option value="body">Ощущение в теле</option><option value="emotion">Эмоцию</option><option value="urge">Импульс</option></select></label><label htmlFor="capture-urge">Что хочется сделать?<select id="capture-urge" value={urge} onChange={e => setUrge(e.target.value)}><option value="avoid">Отложить / замереть</option><option value="distract">Отвлечься</option><option value="attack">Спорить / доказывать</option><option value="withdraw">Уйти / закрыться</option></select></label><Score label="Интенсивность сейчас" value={intensity} onChange={setIntensity}/><label className="trainer-risk" htmlFor="capture-risk">Есть риск причинить вред себе или другому?<select id="capture-risk" value={risk} onChange={e => setRisk(e.target.value)}><option value="unknown">Выберите ответ</option><option value="no">Нет</option><option value="yes">Да / не уверен</option></select></label></div>}
-          <div className="trainer-row"><span className="trainer-caption">{recording ? "Идёт запись. Нажмите ещё раз, чтобы остановить." : analysisPending ? "Ответ сохранится в памяти этого эпизода." : mode === "talk" ? "Можно написать или продиктовать. Перед отправкой расшифровку можно исправить." : analysisDepth === "complex" ? "Разберём цепочку по шагам, затем выберем точку для практики." : "Сначала проверим состояние, затем предложим шаг."}</span><div className="trainer-row" style={{gap:8}}><button type="button" aria-label={recording ? "Остановить запись" : "Записать голосом"} aria-pressed={recording} className="trainer-icon-button" onClick={() => void toggleRecording()}>{recording ? <MicOff size={18}/> : <Mic size={18}/>}</button><button className="trainer-primary" disabled={busy || recording || text.trim().length < 3 || (!analysisPending && mode !== "talk" && risk === "unknown") || (!analysisPending && mode !== "talk" && Boolean(pending))}>{busy ? "Подождём ответ…" : analysisPending ? "Ответить" : mode === "talk" ? "Отправить" : analysisDepth === "complex" ? "Начать подробный разбор" : "Подобрать шаг"}<ArrowUpRight size={17}/></button></div></div>{voiceError && <p className="trainer-caption" role="status">{voiceError}</p>}</form><div className="trainer-actions"><button className="trainer-link" onClick={() => enter("talk")}><MessageCircle size={16}/> Задать вопрос тренеру</button><button className="trainer-link" onClick={() => enter("stuck", "complex")}>Подробно разобрать ситуацию</button><button className="trainer-link" onClick={() => enter("distress")}>Помочь с состоянием</button></div></>}
+          <div className="trainer-row"><span className="trainer-caption">{recording ? "Идёт запись. Нажмите ещё раз, чтобы остановить." : analysisPending ? "Ответ сохранится в памяти этого эпизода." : mode === "talk" ? "Можно написать или продиктовать. Перед отправкой расшифровку можно исправить." : analysisDepth === "complex" ? "Разберём цепочку по шагам, затем выберем точку для практики." : "Сначала проверим состояние, затем предложим шаг."}</span><div className="trainer-row" style={{gap:8}}><button type="button" aria-label={recording ? "Остановить запись" : "Записать голосом"} aria-pressed={recording} className="trainer-icon-button" onClick={() => void toggleRecording()}>{recording ? <MicOff size={18}/> : <Mic size={18}/>}</button><button className="trainer-primary" disabled={sendDisabled}>{busy ? "Подождём ответ…" : analysisPending ? "Ответить" : mode === "talk" ? "Отправить" : analysisDepth === "complex" ? "Начать подробный разбор" : "Подобрать шаг"}<ArrowUpRight size={17}/></button></div></div>{voiceError && <p className="trainer-caption" role="status">{voiceError}</p>}</form><div className="trainer-actions"><button className="trainer-link" onClick={() => enter("talk")}><MessageCircle size={16}/> Задать вопрос тренеру</button><button className="trainer-link" onClick={() => enter("stuck", "complex")}>Подробно разобрать ситуацию</button><button className="trainer-link" onClick={() => enter("distress")}>Помочь с состоянием</button></div></>}
         </>}
-        {screen === "journal" && <><span className="trainer-kicker">ПАМЯТЬ О РЕАЛЬНЫХ ПОПЫТКАХ</span><h1>Твоя неделя.</h1><p className="trainer-lead">{state.recap.attempts} попыток · {state.recap.completed} выполненных действий</p>{state.day >= 3 && <button className="trainer-primary" onClick={showRecap}>Итог {state.day >= 7 ? "недели" : "трёх дней"}<Sparkles size={17}/></button>}<div className="trainer-history">{state.plans.length ? state.plans.map(p => <article key={p.id}><span>{new Date(p.created_at).toLocaleDateString("ru")}</span><h3>{p.skill_title}</h3><p>{p.result === "done" ? "Получилось" : p.result === "more" ? "Сделано больше" : p.result === "failed" ? "Не получилось — можно уменьшить шаг" : p.attempt_id ? "Практика начата" : "Шаг предложен"}</p>{p.helpfulness !== null && <small>Оценка пользы: {p.helpfulness}/10</small>}</article>) : <p>Здесь появятся твои попытки. Начать можно с одного маленького действия.</p>}</div><a className="trainer-link" href="/journal">Открыть прежнюю карту навыков <ArrowUpRight size={16}/></a></>}
-        {screen === "recap" && <><span className="trainer-kicker">{trainer.name.toUpperCase()} · ИТОГ {state.day >= 7 ? "НЕДЕЛИ" : "ТРЁХ ДНЕЙ"}</span><h1>Что мы заметили.</h1><p className="trainer-lead">Только сохранённые попытки. Без оценок твоей личности.</p><div className="trainer-recap-stats"><div><strong>{state.recap.proposed}</strong><span>действий предложено</span></div><div><strong>{state.recap.attempts}</strong><span>реальных попыток</span></div><div><strong>{state.recap.outcomesRecorded}</strong><span>результатов отмечено</span></div><div><strong>{state.recap.engagedDays.length}</strong><span>дней с взаимодействием</span></div></div><section className="trainer-panel"><h2>Сохранённые факты</h2><p>{state.recap.facts.join(" ") || "Пока нет сохранённых действий и результатов."}</p></section>{state.day >= 7 && <><section className="trainer-panel"><span className="trainer-kicker">РАБОЧАЯ ГИПОТЕЗА</span><h2>{state.recap.day7.workingHypothesis}</h2></section><section className="trainer-panel"><span className="trainer-kicker">УВЕРЕННОСТЬ · {state.recap.day7.confidenceLevel === "limited" ? "ОГРАНИЧЕННАЯ" : "НИЗКАЯ"}</span><h2>Насколько можно опираться на вывод</h2><p>{state.recap.day7.confidence}</p></section><section className="trainer-panel"><span className="trainer-kicker">СЛЕДУЮЩИЙ ЭКСПЕРИМЕНТ</span><h2>{state.recap.day7.nextExperiment.title}</h2><p>{state.recap.day7.nextExperiment.prompt}</p></section></>}{[["Какие действия были предложены", state.recap.skills], ["По твоим оценкам было полезно", state.recap.helpful], ["Не подошло или получило низкую оценку", state.recap.difficult], ["Польза отмечена повторно", state.recap.repeated], ["Чего мы пока не знаем", state.recap.unknown]].map(([label, values]) => <section className="trainer-panel" key={label as string}><h2>{label}</h2><p>{(values as string[]).join(" · ") || "Нет таких сохранённых данных"}</p></section>)}{state.day < 7 && <p className="trainer-lead">{state.recap.next}</p>}<form className="trainer-panel" onSubmit={async e => { e.preventDefault(); if (await command({ action: "feedback", ...feedback })) setFeedbackSaved(true); }}><h2>Как тебе эта работа?</h2><Score label="Насколько полезно?" value={feedback.helpfulness} onChange={v => setFeedback({ ...feedback, helpfulness: v })}/><Score label="Было ощущение, что тренер понимает и помнит?" value={feedback.understood} onChange={v => setFeedback({ ...feedback, understood: v })}/><Score label="Насколько хочется продолжить?" value={feedback.continueIntent} onChange={v => setFeedback({ ...feedback, continueIntent: v })}/><label className="trainer-label">Что помогло?<textarea className="trainer-input" maxLength={800} value={feedback.helped} onChange={e => setFeedback({ ...feedback, helped: e.target.value })}/></label><label className="trainer-label">Что мешало?<textarea className="trainer-input" maxLength={800} value={feedback.annoyed} onChange={e => setFeedback({ ...feedback, annoyed: e.target.value })}/></label><button className="trainer-primary" disabled={busy || feedbackSaved}>{feedbackSaved ? "Спасибо, ответ сохранён" : "Сохранить отзыв"}</button></form></>}
+        {screen === "journal" && <><span className="trainer-kicker">ПАМЯТЬ О РЕАЛЬНЫХ ПОПЫТКАХ</span><h1>Ваша неделя.</h1><p className="trainer-lead">{state.recap.attempts} попыток · {state.recap.completed} выполненных действий</p>{state.day >= 3 && <button className="trainer-primary" onClick={showRecap}>Итог {state.day >= 7 ? "недели" : "трёх дней"}<Sparkles size={17}/></button>}<div className="trainer-history">{state.plans.length ? state.plans.map(p => <article key={p.id}><span>{new Date(p.created_at).toLocaleDateString("ru")}</span><h3>{p.skill_title}</h3><p>{p.paused ? "На паузе — результат не изменён" : p.result === "done" ? "Получилось" : p.result === "more" ? "Сделано больше" : p.result === "partial" ? "Сделано частично" : p.result === "failed" ? "Не получилось — можно уменьшить шаг" : p.reported_result ? "Выполнение отмечено; польза пока не оценена" : p.attempt_id ? "Практика начата" : "Шаг предложен"}</p>{p.completed_part && <p><strong>Удалось сделать:</strong> {p.completed_part}</p>}{p.stopping_point && <p><strong>Остановка:</strong> {p.stopping_point}</p>}{p.worsened ? <small>После практики стало хуже</small> : p.helpfulness !== null && <small>Оценка пользы: {p.helpfulness}/10</small>}</article>) : <p>Здесь появятся Ваши попытки. Начать можно с одного маленького действия.</p>}</div><a className="trainer-link" href="/journal">Открыть прежнюю карту навыков <ArrowUpRight size={16}/></a></>}
+        {screen === "recap" && <><span className="trainer-kicker">{trainer.name.toUpperCase()} · ИТОГ {state.day >= 7 ? "НЕДЕЛИ" : "ТРЁХ ДНЕЙ"}</span><h1>Что мы заметили.</h1><p className="trainer-lead">Только сохранённые попытки. Без оценок Вашей личности.</p><div className="trainer-recap-stats"><div><strong>{state.recap.proposed}</strong><span>действий предложено</span></div><div><strong>{state.recap.attempts}</strong><span>реальных попыток</span></div><div><strong>{state.recap.outcomesRecorded}</strong><span>результатов отмечено</span></div><div><strong>{state.recap.engagedDays.length}</strong><span>дней с взаимодействием</span></div></div><section className="trainer-panel"><h2>Сохранённые факты</h2><p>{state.recap.facts.join(" ") || "Пока нет сохранённых действий и результатов."}</p></section>{state.day >= 7 && <><section className="trainer-panel"><span className="trainer-kicker">РАБОЧАЯ ГИПОТЕЗА</span><h2>{state.recap.day7.workingHypothesis}</h2></section><section className="trainer-panel"><span className="trainer-kicker">УВЕРЕННОСТЬ · {state.recap.day7.confidenceLevel === "limited" ? "ОГРАНИЧЕННАЯ" : "НИЗКАЯ"}</span><h2>Насколько можно опираться на вывод</h2><p>{state.recap.day7.confidence}</p></section><section className="trainer-panel"><span className="trainer-kicker">СЛЕДУЮЩИЙ ЭКСПЕРИМЕНТ</span><h2>{state.recap.day7.nextExperiment.title}</h2><p>{state.recap.day7.nextExperiment.prompt}</p></section></>}{[["Какие действия были предложены", state.recap.skills], [systemPrompt(profile, "recapHelpful"), state.recap.helpful], ["Не подошло или получило низкую оценку", state.recap.difficult], ["Польза отмечена повторно", state.recap.repeated], ["Чего мы пока не знаем", state.recap.unknown]].map(([label, values]) => <section className="trainer-panel" key={label as string}><h2>{label}</h2><p>{(values as string[]).join(" · ") || "Нет таких сохранённых данных"}</p></section>)}{state.day < 7 && <p className="trainer-lead">{state.recap.next}</p>}<form className="trainer-panel" onSubmit={async e => { e.preventDefault(); if (await command({ action: "feedback", ...feedback })) setFeedbackSaved(true); }}><h2>{systemPrompt(profile, "recapFeedback")}</h2><Score label="Насколько полезно?" value={feedback.helpfulness} onChange={v => setFeedback({ ...feedback, helpfulness: v })}/><Score label="Было ощущение, что тренер понимает и помнит?" value={feedback.understood} onChange={v => setFeedback({ ...feedback, understood: v })}/><Score label="Насколько хочется продолжить?" value={feedback.continueIntent} onChange={v => setFeedback({ ...feedback, continueIntent: v })}/><label className="trainer-label">Что помогло?<textarea className="trainer-input" maxLength={800} value={feedback.helped} onChange={e => setFeedback({ ...feedback, helped: e.target.value })}/></label><label className="trainer-label">Что мешало?<textarea className="trainer-input" maxLength={800} value={feedback.annoyed} onChange={e => setFeedback({ ...feedback, annoyed: e.target.value })}/></label><button className="trainer-primary" disabled={busy || feedbackSaved}>{feedbackSaved ? "Спасибо, ответ сохранён" : "Сохранить отзыв"}</button></form></>}
       </main></>}
-    <footer className="trainer-footer"><span>SKILLER</span><p>Не нужно идеально. Достаточно попробовать.</p><small>AI-тренер навыков · не замена психотерапии</small></footer>
+    <footer className="trainer-footer"><span>SKILLER</span><p>Не нужно идеально. Достаточно попробовать.</p><small>Помощник на основе искусственного интеллекта · не замена психотерапии</small></footer>
   </div>;
 }
 function Score({ label, value, onChange }: { label: string; value: number; onChange: (v: number) => void }) { return <label className="trainer-score"><span>{label} <strong>{value}/10</strong></span><input type="range" min={0} max={10} value={value} onChange={e => onChange(Number(e.target.value))}/></label>; }
-function PlanCard({ plan, plannedAction, busy, command }: { plan: TrainerPlan; plannedAction?: string; busy: boolean; command: (p: Record<string, unknown>) => Promise<TrainerState | null> }) {
+function PlanCard({ plan, plannedAction, busy, command, onPause, preferences }: { preferences: CommunicationPreferences; plan: TrainerPlan; plannedAction?: string; busy: boolean; onPause: () => Promise<void>; command: (p: Record<string, unknown>) => Promise<TrainerState | null> }) {
   const skill = JSON.parse(plan.skill_json) as SkillView;
+  const durationLabel = `${Math.floor(skill.durationSeconds / 60)}:${String(skill.durationSeconds % 60).padStart(2, "0")}`;
+  const displaySteps = displaySkillSteps(skill.id, skill.steps);
   const concreteAction = plannedAction && plannedAction !== skill.title ? plannedAction : null;
-  const [helpfulness, setHelpfulness] = useState(5);
-  const [after, setAfter] = useState(plan.intensity_before);
+  const [completedPart, setCompletedPart] = useState(plan.completed_part ?? "");
+  const [stoppingPoint, setStoppingPoint] = useState(plan.stopping_point ?? "");
+  const [detailsSaved, setDetailsSaved] = useState(false);
+  const [helpfulness, setHelpfulness] = useState<number | null>(null);
+  const [after, setAfter] = useState<number | null>(null);
   const [remaining, setRemaining] = useState(skill.durationSeconds);
-  useEffect(() => { if (!plan.attempt_id) return; const timer = setInterval(() => setRemaining(v => Math.max(0, v - 1)), 1000); return () => clearInterval(timer); }, [plan.attempt_id]);
+  useEffect(() => { if (!plan.attempt_id || plan.reported_result) return; const timer = setInterval(() => setRemaining(v => Math.max(0, v - 1)), 1000); return () => clearInterval(timer); }, [plan.attempt_id, plan.reported_result]);
   return (
     <section className="trainer-plan">
-      <span className="trainer-kicker">ОДНО ПОСИЛЬНОЕ ДЕЙСТВИЕ · {Math.ceil(skill.durationSeconds / 60)} МИН</span>
+      <span className="trainer-kicker">ОДНО ПОСИЛЬНОЕ ДЕЙСТВИЕ · ОРИЕНТИР {durationLabel}</span>
       <h2>{concreteAction ?? skill.title}</h2>
       <p>{concreteAction ? "Сейчас достаточно сделать только этот шаг. После него можно остановиться и написать тренеру." : skill.description}</p>
-      <p className="trainer-decision-reason"><strong>{concreteAction ? `Навык для тренировки: ${skill.title}` : "Почему такой шаг"}</strong><span>{concreteAction ? skill.description : explainDecisionReason(plan.decision_reason_code)}</span></p>
-      {concreteAction && <ol><li><strong>{concreteAction}</strong><p>Не нужно продолжать автоматически. Сначала зафиксируйте результат этого действия.</p></li></ol>}
-      <span className="trainer-kicker">ПОЛНАЯ ПРАКТИКА НАВЫКА</span>
-      <ol>{skill.steps.map((step) => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
+      <details className="micro-start-example">
+        <summary>Почему предложен этот шаг?</summary>
+        <p><strong>Навык:</strong> {skill.title}</p>
+        <p>{skill.description}</p>
+        <p>{explainDecisionReason(plan.decision_reason_code)}</p>
+      </details>
+      {concreteAction && <p>{systemPrompt(preferences, "cardResult")}</p>}
+      {skill.id === "micro-start" && <MicroStartExample plannedAction={concreteAction} />}
+      {skill.id === "stop" && <StopExample plannedAction={concreteAction} />}
+      {skill.id === "grounding-543" && <GroundingExample plannedAction={concreteAction} />}
+      <SkillExample skillId={skill.id} plannedAction={concreteAction} />
+      {concreteAction ? <details className="micro-start-example">
+        <summary>Показать шаги навыка</summary>
+        <p>{systemPrompt(preferences, "cardTask")}</p>
+        <ol>{displaySteps.map(step => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
+      </details> : <><span className="trainer-kicker">ШАГИ ПРАКТИКИ</span>
+        <ol>{displaySteps.map(step => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
+      </>}
+      <button className="trainer-secondary" disabled={busy} onClick={() => void onPause()}>Поставить на паузу</button>
       {!plan.attempt_id ? (
         <div className="trainer-actions"><button className="trainer-primary" disabled={busy} onClick={() => command({ action: "start", planId: plan.id })}>Начать действие <Play size={16}/></button><button className="trainer-secondary" disabled={busy} onClick={() => command({ action: "reject", planId: plan.id })}>Шаг не подходит</button></div>
       ) : (
         <>
-          <div className="trainer-timer">{Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}<small>Ориентир, не экзамен. Закончить можно раньше.</small></div>
-          <Score label="Насколько это было полезно?" value={helpfulness} onChange={setHelpfulness}/>
-          {plan.entry_mode === "distress" && <Score label="Интенсивность после практики" value={after} onChange={setAfter}/>} 
-          <div className="trainer-actions">
-            {[["done", "Получилось"], ["partial", "Частично"], ["failed", "Не получилось"], ["more", "Получилось сделать больше"]].map(([result, label]) => (
-              <button disabled={busy} className="trainer-secondary" key={result} onClick={() => command({ action: "outcome", planId: plan.id, result, helpfulness, intensity: after })}>{label}</button>
-            ))}
-            <button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "reject", planId: plan.id })}>Шаг не подходит</button>
-          </div>
+          <div className="trainer-timer">{Math.floor(remaining / 60)}:{String(remaining % 60).padStart(2, "0")}<small>Ориентир практики. Можно закончить раньше или продолжить; ноль на таймере не означает выполнение.</small></div>
+          {!plan.reported_result ? <>
+            <h3>Что удалось сделать?</h3>
+            <div className="trainer-actions">
+              {[["done", "Сделано"], ["partial", "Частично"], ["failed", "Не сделано"], ["more", "Сделано больше плана"]].map(([result, label]) => (
+                <button disabled={busy} className="trainer-secondary" key={result} onClick={() => command({ action: "performance", planId: plan.id, result })}>{label}</button>
+              ))}
+              <button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "reject", planId: plan.id })}>Шаг не подходит</button>
+            </div>
+          </> : <>
+            <p role="status">Сохранено: {plan.reported_result === "partial" ? "сделано частично" : plan.reported_result === "failed" ? "не сделано" : plan.reported_result === "more" ? "сделано больше плана" : "сделано"}. Пользу можно оценить сейчас или после возвращения.</p>
+            {plan.reported_result === "partial" && <fieldset className="micro-start-example">
+              <legend>Что получилось частично?</legend>
+              <p>Можно уточнить своими словами или сразу перейти к пользе. Эти ответы не означают, что практика помогла.</p>
+              <label className="trainer-label">Что удалось сделать?<textarea className="trainer-input" rows={2} maxLength={800} value={completedPart} onChange={event => { setCompletedPart(event.target.value); setDetailsSaved(false); }} /></label>
+              <label className="trainer-label">{systemPrompt(preferences, "cardStopped")}<textarea className="trainer-input" rows={2} maxLength={800} value={stoppingPoint} onChange={event => { setStoppingPoint(event.target.value); setDetailsSaved(false); }} /></label>
+              <button className="trainer-secondary" disabled={busy} onClick={async () => { if (await command({ action: "performanceDetails", planId: plan.id, completedPart, stoppingPoint })) setDetailsSaved(true); }}>Сохранить уточнение</button>
+              {detailsSaved && <p role="status">Уточнение сохранено. Пользу оцениваем отдельно.</p>}
+              {(completedPart !== (plan.completed_part ?? "") || stoppingPoint !== (plan.stopping_point ?? "")) && <p>Есть несохранённое уточнение. Сохраните его перед паузой или оценкой пользы, если хотите оставить эти слова в истории.</p>}
+            </fieldset>}
+            <label className="trainer-label">Насколько практика помогла, от 0 до 10?
+              <input className="trainer-input" type="number" min={0} max={10} step={1} value={helpfulness ?? ""} onChange={event => { const value = event.target.valueAsNumber; setHelpfulness(Number.isInteger(value) && value >= 0 && value <= 10 ? value : null); }} />
+            </label>
+            {plan.entry_mode === "distress" && <label className="trainer-label">Интенсивность состояния сейчас, от 0 до 10?
+              <input className="trainer-input" type="number" min={0} max={10} step={1} value={after ?? ""} onChange={event => { const value = event.target.valueAsNumber; setAfter(Number.isInteger(value) && value >= 0 && value <= 10 ? value : null); }} />
+            </label>}
+            <div className="trainer-actions">
+              <button disabled={busy || helpfulness === null || (plan.entry_mode === "distress" && after === null)} className="trainer-secondary" onClick={() => command({ action: "outcome", planId: plan.id, result: plan.reported_result, helpfulness, ...(after !== null ? { intensity: after } : {}) })}>Сохранить пользу</button>
+              <button disabled={busy || (plan.entry_mode === "distress" && after === null)} className="trainer-secondary" onClick={() => command({ action: "outcome", planId: plan.id, result: plan.reported_result, helpfulness: 0, worsened: true, ...(after !== null ? { intensity: after } : {}) })}>Стало хуже</button>
+            </div>
+          </>}
+
         </>
       )}
     </section>

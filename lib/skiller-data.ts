@@ -1,3 +1,4 @@
+import { displaySkillSteps } from "./skill-instruction-copy";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb, getRawDb } from "@/db";
 import {
@@ -300,7 +301,7 @@ function toSkillView(row: typeof skills.$inferSelect): SkillView {
   return {
     ...row,
     version: skillCardVersion(row.id),
-    steps: JSON.parse(row.stepsJson) as SkillStep[],
+    steps: displaySkillSteps(row.id, JSON.parse(row.stepsJson) as SkillStep[]),
   };
 }
 

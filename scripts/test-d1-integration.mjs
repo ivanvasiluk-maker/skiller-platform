@@ -527,8 +527,41 @@ try {
     },
   });
 
+  const separateOutcome = await runEndpoint(baseUrl, "separate-outcome-cycle");
+  for (const [key, value] of Object.entries(separateOutcome)) assert.equal(value, true, `Separate outcome: ${key}`);
+
+  const quickStop = await runEndpoint(baseUrl, "quick-stop-cycle");
+  assert.equal(quickStop.safetyBlocked, true);
+  assert.equal(quickStop.cases.length, 4);
+  for (const item of quickStop.cases) {
+    for (const key of ["stop", "noAttemptOnPrepare", "ownSituation", "duplicateSafe", "blocked", "saved", "attempted", "resolved", "rejectionDistinct"]) {
+      assert.equal(item[key], true, `Quick STOP ${item.outcome}: ${key}`);
+    }
+  }
+
+  const historyCycle = await runEndpoint(baseUrl, "history-cycle");
+  for (const [key, value] of Object.entries(historyCycle)) assert.equal(value, true, `History: ${key}`);
+
+  const pauseCycle = await runEndpoint(baseUrl, "pause-cycle");
+  for (const [key, value] of Object.entries(pauseCycle)) assert.equal(value, true, `Pause: ${key}`);
+
+  const preferences = await runEndpoint(baseUrl, "communication-preferences-cycle");
+  assert.ok(Object.values(preferences).every(value => value === true), JSON.stringify(preferences));
+
+  const newSituation = await runEndpoint(baseUrl, "new-situation-cycle");
+  for (const [key, value] of Object.entries(newSituation)) assert.equal(value, true, `New situation: ${key}`);
+
   const simpleAnalysis = await runEndpoint(baseUrl, "simple-analysis-cycle");
   assert.deepEqual(simpleAnalysis, {
+    returnCycle: {
+      samePlan: true,
+      sameAction: true,
+      successAnalysisStarted: true,
+      successFactorStored: true,
+      loopResolved: true,
+      followUpCompleted: true,
+      noExtraPlan: true,
+    },
     noPlanBeforeConfirmation: true,
     stages: ["clarify", "confirm", "correct", "confirm"],
     correctedHypothesis: true,

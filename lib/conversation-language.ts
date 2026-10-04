@@ -1,3 +1,4 @@
+import { systemPrompt, type CommunicationPreferences } from "./communication-preferences.ts";
 /**
  * Preserve an action already formulated by the user. The Skill Engine still
  * selects the intervention; this text is only the human-facing agreement and
@@ -33,7 +34,7 @@ export function extractShortTrigger(text: string): string {
 export function classifyAttemptReport(text: string): AttemptReport {
   const compact = text.replace(/\s+/g, " ").trim().toLowerCase();
   const endsToken = "(?=\\s|$|[.!?,])";
-  if (new RegExp(`^(?:не\\s+сделал(?:а)?|не\\s+попробовал(?:а)?|не\\s+начал(?:а)?|ничего\\s+не\\s+сделал(?:а)?)${endsToken}`, "u").test(compact)) return "not_done";
+  if (new RegExp(`^(?:не\\s+получилось|не\\s+сделал(?:а)?|не\\s+попробовал(?:а)?|не\\s+начал(?:а)?|ничего\\s+не\\s+сделал(?:а)?)${endsToken}`, "u").test(compact)) return "not_done";
   if (new RegExp(`^(?:не\\s+буду|не\\s+хочу|шаг\\s+не\\s+подходит|это\\s+не\\s+подходит)${endsToken}`, "u").test(compact)) return "refusal";
   if (/^(?:частично|начал(?:а)?\s+и\s+(?:бросил(?:а)?|остановил(?:ась|ся))|открыл(?:а)?[^.]{0,80}\sно\s)/u.test(compact)) return "partial";
   if (new RegExp(`^(?:сделал(?:а)?|попробовал(?:а)?|получилось|закончил(?:а)?)${endsToken}`, "u").test(compact)) return "done";
@@ -41,10 +42,10 @@ export function classifyAttemptReport(text: string): AttemptReport {
   return "unknown";
 }
 
-export function missingLinkQuestion(text: string): string {
+export function missingLinkQuestion(text: string, preferences: CommunicationPreferences = {}): string {
   const compact = text.toLowerCase();
   if (/youtube|ютуб|видео/u.test(compact)) {
-    return "Тогда повторять тот же совет не будем. Что произошло непосредственно перед видео: появилась мысль «это не поможет», стало неприятно начинать или Вы открыли его почти автоматически?";
+    return systemPrompt(preferences, "missingVideo");
   }
-  return "Тогда повторять тот же совет не будем. Что произошло непосредственно перед тем, как Вы отказались от шага: появилась мысль, стало неприятно начинать или Вы переключились почти автоматически?";
+  return systemPrompt(preferences, "missingRefusal");
 }

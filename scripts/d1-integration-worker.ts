@@ -22,7 +22,8 @@ import {
 import { requiresSafetyRoute, safetyMessage } from "../lib/trainers";
 import { produceFreeTalkReply } from "../lib/free-talk";
 import { buildFreeTalkFallback, getCharacterBible } from "../lib/character-bible";
-import { trainerCommand } from "../lib/trainer-data";
+import { trainerCommand, trainerState, trainerHistory } from "../lib/trainer-data";
+import { buildConversationContext, renderConversationContext } from "../lib/conversation-orchestrator";
 import { runSheetsExport } from "../lib/sheets-exporter";
 import { createInMemorySheets } from "../lib/in-memory-sheets";
 
@@ -1183,7 +1184,187 @@ async function runRelationshipCycle(db: D1Database) {
 }
 
 /** Conversation-first: вопрос → гипотеза → исправление → подтверждение → практика. */
-async function runSimpleAnalysisCycle() {
+async function runSeparateOutcomeCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const user = { userId: `separate-${suffix}`, displayName: "Outcome Test", email: `${suffix}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "marsha", text: "Хочу делать паузу перед ответом", consent: true });
+  const prepared = await command({ action: "quickStop", text: "Хочу остановиться перед резким ответом", intensity: 5, risk: "no", urge: "attack" });
+  const plan = prepared.plans[0];
+  await command({ action: "start", planId: plan.id });
+  await command({ action: "performance", planId: plan.id, result: "partial" });
+  const reopened = await command({ action: "open", sessionId: crypto.randomUUID() });
+  const beforeBenefit = await db.prepare("SELECT COUNT(*) AS count FROM outcomes WHERE user_id=?").bind(user.userId).first<{ count: number }>();
+  let contradictionBlocked = false;
+  try { await command({ action: "outcome", planId: plan.id, result: "done", helpfulness: 8, intensity: 4 }); } catch { contradictionBlocked = true; }
+  const worsened = await command({ action: "outcome", planId: plan.id, result: "partial", helpfulness: 0, intensity: 7, worsened: true });
+  const outcome = await db.prepare("SELECT completed,helpfulness,note FROM outcomes WHERE user_id=?").bind(user.userId).first<{ completed: number; helpfulness: number; note: string }>();
+  const afterExplanation = await command({ action: "message", mode: "talk", text: "Напряжение усилилось, когда я наблюдал за собой" });
+  const next = await command({ action: "quickStop", text: "Хочу сделать паузу перед ответом", intensity: 4, risk: "no", urge: "attack" });
+  return {
+    resumedBenefit: reopened.plans[0].reported_result === "partial" && reopened.plans[0].result === null,
+    benefitUnknown: reopened.plans[0].helpfulness === null && beforeBenefit?.count === 0,
+    contradictionBlocked,
+    worseningStored: worsened.plans[0].worsened === 1 && outcome?.note === "benefit:worsened",
+    noFullCompletion: outcome?.completed === 0,
+    noSuccessFollowUp: worsened.pendingFollowUp?.kind === "worsened",
+    explanationSaved: afterExplanation.pendingFollowUp === null,
+    replacement: JSON.parse(next.plans[0].skill_json).id !== "stop",
+  };
+}
+
+async function runQuickStopCycle() {
+  const cases = [];
+  for (const outcome of ["done", "partial", "failed", "reject"] as const) {
+    const suffix = crypto.randomUUID();
+    const user = { userId: `quick-stop-${suffix}`, displayName: "STOP Test", email: `${suffix}@example.invalid`, fullName: null };
+    const sessionId = crypto.randomUUID();
+    const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+    await command({ action: "onboard", name: "Тест", trainerId: "marsha", text: "Хочу делать паузу перед ответом", consent: true });
+    const requestId = crypto.randomUUID();
+    const payload = { action: "quickStop", text: "Хочу сделать паузу перед ответом коллеге", intensity: 4, risk: "no", urge: "attack", requestId, sessionId };
+    const prepared = await trainerCommand(user, payload);
+    const duplicate = await trainerCommand(user, payload);
+    const plan = prepared.plans[0];
+    let blocked = false;
+    try { await command({ ...payload, requestId: crypto.randomUUID() }); } catch { blocked = true; }
+    if (outcome === "reject") await command({ action: "reject", planId: plan.id });
+    else {
+      await command({ action: "start", planId: plan.id });
+      await command({ action: "outcome", planId: plan.id, result: outcome, helpfulness: 6, intensity: 3 });
+    }
+    const reopened = await command({ action: "open", sessionId: crypto.randomUUID() });
+    cases.push({ outcome, stop: JSON.parse(plan.skill_json).id === "stop", noAttemptOnPrepare: !plan.attempt_id,
+      ownSituation: prepared.messages.some(message => message.text === payload.text),
+      duplicateSafe: duplicate.plans.length === 1 && duplicate.plans[0].id === plan.id,
+      blocked, saved: reopened.plans[0].result === (outcome === "reject" ? "failed" : outcome),
+      attempted: Boolean(reopened.plans[0].attempt_id) === (outcome !== "reject"),
+      resolved: reopened.openLoops.length === 0,
+      rejectionDistinct: outcome !== "reject" || reopened.pendingFollowUp?.kind === "rejection" });
+  }
+  const suffix = crypto.randomUUID();
+  const user = { userId: `quick-safety-${suffix}`, displayName: "Safety Test", email: `${suffix}@example.invalid`, fullName: null };
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId: crypto.randomUUID(), ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "marsha", text: "Хочу делать паузу перед ответом", consent: true });
+  const unsafe = await command({ action: "quickStop", text: "Хочу сделать паузу перед ответом", intensity: 4, risk: "unknown", urge: "attack" });
+  return { cases, safetyBlocked: Boolean(unsafe.profile?.safety_flag) && unsafe.plans.length === 0 };
+}
+
+async function runHistoryCycle(db: D1Database) {
+  const id = crypto.randomUUID();
+  const user = { userId: `history-${id}`, displayName: "History", email: `${id}@example.invalid`, fullName: null };
+  await trainerCommand(user, { action: "onboard", name: "Тест", trainerId: "beck", text: "История", consent: true, requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  const ids = Array.from({ length: 125 }, () => crypto.randomUUID());
+  await db.batch(ids.map((messageId, index) => db.prepare("INSERT INTO trainer_messages (id,user_id,role,text,trainer_id,created_at) VALUES (?,?,?,?,?,?)").bind(messageId,user.userId,"user",`Message ${index}`,"beck","2026-10-04T10:00:00.000Z")));
+  const current = await trainerState(user);
+  const earlier = await trainerHistory(user,current.messages[0].id);
+  const oldest = await trainerHistory(user,earlier.messages[0].id);
+  const all = [...oldest.messages,...earlier.messages,...current.messages];
+  let foreignCursorBlocked = false;
+  try { await trainerHistory({ ...user, userId: `another-${id}` },ids[0]); } catch { foreignCursorBlocked = true; }
+  return { currentBounded: current.messages.length === 60 && current.hasEarlierMessages === true, pageBounded: earlier.messages.length === 60 && earlier.hasEarlierMessages === true, reachesStart: oldest.messages.length === 6 && !oldest.hasEarlierMessages, noDuplicates: new Set(all.map(message => message.id)).size === 126, tiedTimesInOrder: all.slice(1).every((message,index) => message.id === ids[index]), foreignCursorBlocked };
+}
+
+async function runPauseCycle(db: D1Database) {
+  const id = crypto.randomUUID();
+  const user = { userId: `pause-${id}`, displayName: "Pause", email: `${id}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "beck", text: "Откладываю работу", consent: true });
+  const state = await command({ action: "situation", analysisDepth: "direct", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Помоги начать отчёт с маленького шага" });
+  const plan = state.plans[0];
+  const loop = state.openLoops.find(item => item.plan_id === plan.id);
+  if (!plan || !loop) throw new Error("Missing practice");
+  let detailsBlockedBeforePerformance = false;
+  try { await command({ action: "performanceDetails", planId: plan.id, completedPart: "Выдуманный результат", stoppingPoint: "" }); } catch { detailsBlockedBeforePerformance = true; }
+  const paused = await command({ action: "pause", planId: plan.id });
+  const returned = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  let staleStartBlocked = false;
+  try { await command({ action: "start", planId: plan.id }); } catch { staleStartBlocked = true; }
+  const attempts = await db.prepare("SELECT COUNT(*) AS count FROM skill_attempts WHERE user_id=?").bind(user.userId).first<{ count: number }>();
+  await command({ action: "newSituation" });
+  const newAnalysis = await command({ action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю уборку кухни" });
+  let analysisBlocksResume = false;
+  try { await command({ action: "resume", planId: plan.id }); } catch { analysisBlocksResume = true; }
+  await command({ action: "newSituation", analysisId: newAnalysis.pendingSituationAnalysis?.id });
+  const resumed = await command({ action: "resume", planId: plan.id });
+  await command({ action: "start", planId: plan.id });
+  await command({ action: "performance", planId: plan.id, result: "partial" });
+  await command({ action: "performanceDetails", planId: plan.id, completedPart: "Открыл документ и написал заголовок", stoppingPoint: "Не начал первый абзац" });
+  const requestId = crypto.randomUUID();
+  const reportedPause = await command({ action: "pause", planId: plan.id, requestId });
+  const duplicate = await command({ action: "pause", planId: plan.id, requestId });
+  const reportedResume = await command({ action: "resume", planId: plan.id });
+  const detailsReturned = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  const ctx = await buildConversationContext({ userId: user.userId, profile: detailsReturned.profile, messages: detailsReturned.messages, plans: detailsReturned.plans, engagedDays: detailsReturned.engagedDays });
+  const instructions = renderConversationContext(ctx);
+  const reply = await command({ action: "message", mode: "talk", text: "Что я уже успел сделать?" });
+  const lastReply = reply.messages.filter(message => message.role === "assistant").at(-1)?.text ?? "";
+  const outcomes = await db.prepare("SELECT COUNT(*) AS count FROM outcomes WHERE attempt_id=?").bind(reportedResume.plans[0].attempt_id).first<{ count: number }>();
+  return { detailsInConversation: lastReply.includes("Открыл документ и написал заголовок") && lastReply.includes("Не начал первый абзац"), detailsInContext: ctx.partialPerformance?.[0]?.completedPart === "Открыл документ и написал заголовок" && ctx.partialPerformance?.[0]?.benefit === null && instructions.includes("не инструкции модели"), detailsInRecap: detailsReturned.recap.facts.some(fact => fact.includes("Открыл документ и написал заголовок") && fact.includes("польза пока не оценена")), detailsBlockedBeforePerformance, detailsPersisted: detailsReturned.plans[0].completed_part === "Открыл документ и написал заголовок" && detailsReturned.plans[0].stopping_point === "Не начал первый абзац", noFakeAttempt: attempts?.count === 0, noFakeResult: paused.plans[0].result === null && paused.plans[0].helpfulness === null, persisted: Boolean(returned.plans[0].paused), noActiveReminder: !paused.openLoops.some(item => item.plan_id === plan.id && item.status === "active") && !paused.continuity.openLoop, staleStartBlocked, analysisBlocksResume, sameStep: resumed.plans[0].id === plan.id && resumed.openLoops.find(item => item.plan_id === plan.id)?.planned_action === loop.planned_action, reportPreserved: reportedResume.plans[0].reported_result === "partial" && reportedResume.plans[0].result === null && outcomes?.count === 0, idempotent: reportedPause.messages.length === duplicate.messages.length };
+}
+
+async function runCommunicationPreferencesCycle() {
+  const id = crypto.randomUUID();
+  const user = { userId: `preferences-${id}`, displayName: "Preferences", email: `${id}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  const initial = await command({ action: "onboard", name: "Тест", trainerId: "beck", text: "Откладываю работу", consent: true });
+  const asked = await command({ action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю отчёт и открываю новости" });
+  const addressed = await command({ action: "settings", addressForm: "informal" });
+  const gendered = await command({ action: "settings", grammaticalGender: "feminine" });
+  const revised = await command({ action: "message", mode: "stuck", text: "Мне кажется, я не справлюсь" });
+  const declined = await command({ action: "message", mode: "stuck", text: "Нет" });
+  const planned = await command({ action: "message", mode: "stuck", text: "Мне кажется, я не справлюсь" });
+  const practice = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
+  const duringPractice = await command({ action: "settings", grammaticalGender: "masculine" });
+  const restoredGender = await command({ action: "settings", grammaticalGender: "feminine" });
+  const rejected = await command({ action: "reject", planId: practice.plans[0]?.id });
+  const quoted = "Вы сказали: я не готова";
+  const explained = await command({ action: "message", mode: "stuck", text: quoted });
+  const changed = await command({ action: "settings", addressForm: "formal" });
+  const reloaded = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  let invalidBlocked = false;
+  try { await command({ action: "settings", grammaticalGender: "guess" }); } catch { invalidBlocked = true; }
+  return {
+    defaults: initial.profile?.address_form === "formal" && initial.profile?.grammatical_gender === "neutral",
+    independent: addressed.profile?.grammatical_gender === "neutral" && gendered.profile?.address_form === "informal",
+    persisted: reloaded.profile?.address_form === "formal" && reloaded.profile?.grammatical_gender === "feminine",
+    questionPreserved: JSON.stringify(asked.pendingSituationAnalysis) === JSON.stringify(gendered.pendingSituationAnalysis) && JSON.stringify(asked.messages) === JSON.stringify(gendered.messages),
+    practicePreserved: planned.pendingSituationAnalysis !== null && practice.plans.length > 0 && JSON.stringify(practice.plans) === JSON.stringify(duringPractice.plans) && restoredGender.profile?.grammatical_gender === "feminine",
+    hypothesisCorrectionAddress: planned.messages.at(-1)?.text.includes("поправь одним предложением") === true,
+    hypothesisAddress: declined.messages.at(-1)?.text.includes("твоим опытом") === true && revised.pendingSituationAnalysis !== null,
+    rejectionAddress: rejected.messages.at(-1)?.text.includes("убеждать тебя") === true,
+    userQuotePreserved: explained.messages.some(message => message.role === "user" && message.text === quoted),
+    historyPreserved: rejected.messages.every(message => changed.messages.some(saved => saved.id === message.id && saved.text === message.text)),
+    invalidBlocked,
+  };
+}
+
+async function runNewSituationCycle() {
+  const id = crypto.randomUUID();
+  const user = { userId: `new-situation-${id}`, displayName: "New Situation", email: `${id}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "beck", text: "Откладываю работу", consent: true });
+  const original = await command({ action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю отчёт и открываю новости" });
+  const oldId = original.pendingSituationAnalysis?.id;
+  if (!oldId) throw new Error("Missing initial analysis");
+  let staleBlocked = false;
+  try { await command({ action: "newSituation", analysisId: crypto.randomUUID() }); } catch { staleBlocked = true; }
+  const requestId = crypto.randomUUID();
+  const fresh = await command({ action: "newSituation", analysisId: oldId, requestId });
+  const duplicate = await command({ action: "newSituation", analysisId: oldId, requestId });
+  const next = await command({ action: "situation", analysisDepth: "simple", mode: "distress", kind: "emotion", signal: "emotion", urge: "withdraw", intensity: 5, risk: "no", text: "Расстроился после разговора с другом" });
+  const hypothesized = await command({ action: "message", mode: "distress", text: "Мне кажется, меня не услышали" });
+  const planned = await command({ action: "message", mode: "distress", text: "Да, похоже" });
+  let planBlocked = false;
+  try { await command({ action: "newSituation" }); } catch { planBlocked = true; }
+  return { staleBlocked, oldAnalysisClosed: !fresh.pendingSituationAnalysis, noFakeResult: fresh.plans.length === 0, idempotent: fresh.messages.length === duplicate.messages.length, separateAnalysis: next.pendingSituationAnalysis?.id !== oldId && next.pendingSituationAnalysis?.original_text === "Расстроился после разговора с другом", hypothesisSeparate: hypothesized.pendingSituationAnalysis?.id === next.pendingSituationAnalysis?.id, planBlocked: planBlocked && planned.plans.some(plan => !plan.result) };
+}
+
+async function runSimpleAnalysisCycle(db: D1Database) {
   const suffix = crypto.randomUUID();
   const user = {
     userId: `analysis-${suffix}`,
@@ -1206,7 +1387,35 @@ async function runSimpleAnalysisCycle() {
   const corrected = await command({ action: "message", mode: "stuck", text: "Я боюсь не уложиться в срок и поэтому замираю" });
   const completed = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
 
+  // Continue the same confirmed plan in a new session, without replaying onboarding.
+  const plan = completed.plans[0];
+  const loop = completed.openLoops[0];
+  if (!plan || !loop) throw new Error("Confirmed analysis did not persist a plan and open loop");
+  await command({ action: "start", planId: plan.id });
+  await db.prepare("UPDATE open_loops SET follow_up_due=? WHERE id=?")
+    .bind(new Date(Date.now() - 3600000).toISOString(), loop.id).run();
+  const nextSessionId = crypto.randomUUID();
+  const returnCommand = (body: Record<string, unknown>) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId: nextSessionId, ...body });
+  const reopened = await returnCommand({ action: "open" });
+  const reported = await returnCommand({ action: "outcome", planId: plan.id, result: "done", helpfulness: 8 });
+  await returnCommand({ action: "message", mode: "talk", text: "Помогло заранее открыть документ и убрать уведомления" });
+  const afterReturn = await returnCommand({ action: "open" });
+  const factor = await db.prepare("SELECT COUNT(*) AS count FROM success_factors WHERE user_id=?")
+    .bind(user.userId).first<{ count: number }>();
+  const resolved = await db.prepare("SELECT status, outcome FROM open_loops WHERE id=?")
+    .bind(loop.id).first<{ status: string; outcome: string }>();
+
   return {
+    returnCycle: {
+      samePlan: reopened.plans.some(item => item.id === plan.id),
+      sameAction: reopened.dueLoop?.planned_action === loop.planned_action,
+      successAnalysisStarted: reported.pendingFollowUp?.kind === "success",
+      successFactorStored: (factor?.count ?? 0) > 0,
+      loopResolved: resolved?.status === "resolved" && resolved.outcome === "done",
+      followUpCompleted: afterReturn.pendingFollowUp === null,
+      noExtraPlan: afterReturn.plans.length === 1,
+    },
     noPlanBeforeConfirmation: asked.plans.length === 0 && hypothesized.plans.length === 0,
     stages: [
       asked.pendingSituationAnalysis?.stage ?? null,
@@ -1466,8 +1675,18 @@ const worker: ExportedHandler<Env> = {
     if (request.method === "POST" && url.pathname === "/relationship-cycle") {
       return Response.json(await runRelationshipCycle(env.DB));
     }
+    if (request.method === "POST" && url.pathname === "/separate-outcome-cycle") {
+      return Response.json(await runSeparateOutcomeCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/quick-stop-cycle") {
+      return Response.json(await runQuickStopCycle());
+    }
+    if (request.method === "POST" && url.pathname === "/history-cycle") return Response.json(await runHistoryCycle(env.DB));
+    if (request.method === "POST" && url.pathname === "/pause-cycle") return Response.json(await runPauseCycle(env.DB));
+    if (request.method === "POST" && url.pathname === "/communication-preferences-cycle") return Response.json(await runCommunicationPreferencesCycle());
+    if (request.method === "POST" && url.pathname === "/new-situation-cycle") return Response.json(await runNewSituationCycle());
     if (request.method === "POST" && url.pathname === "/simple-analysis-cycle") {
-      return Response.json(await runSimpleAnalysisCycle());
+      return Response.json(await runSimpleAnalysisCycle(env.DB));
     }
     if (request.method === "POST" && url.pathname === "/behavior-chain-cycle") {
       return Response.json(await runBehaviorChainCycle(env.DB));

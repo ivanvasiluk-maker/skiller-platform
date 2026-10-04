@@ -1,3 +1,4 @@
+import { systemPrompt, type CommunicationPreferences } from "./communication-preferences";
 import { getRawDb } from "@/db";
 import { extractShortTrigger } from "./conversation-language.ts";
 
@@ -148,11 +149,11 @@ export async function createSituationAnalysis(input: Omit<SituationAnalysisSessi
   return session;
 }
 
-export function clarificationQuestion(kind: SituationAnalysisSession["kind"]) {
-  if (kind === "conflict") return "Вспомните конкретный момент: что человек сказал или сделал прямо перед Вашей реакцией?";
+export function clarificationQuestion(kind: SituationAnalysisSession["kind"], preferences: CommunicationPreferences = {}) {
+  if (kind === "conflict") return systemPrompt(preferences, "conflictQuestion");
   if (kind === "emotion") return "Что произошло непосредственно перед тем, как эмоция стала сильной?";
-  if (kind === "stuck") return "Вспомните момент прямо перед тем, как Вы отложили действие: что произошло или какая мысль мелькнула?";
-  return "Что произошло непосредственно перед этой реакцией? Опишите один конкретный момент.";
+  if (kind === "stuck") return systemPrompt(preferences, "stuckQuestion");
+  return systemPrompt(preferences, "otherQuestion");
 }
 
 const signalLabels: Record<SituationAnalysisSession["signal"], string> = {
@@ -168,20 +169,20 @@ const urgeLabels: Record<SituationAnalysisSession["urge"], string> = {
   withdraw: "уйти или закрыться",
 };
 
-export function buildWorkingHypothesis(session: SituationAnalysisSession, clarification: string) {
+export function buildWorkingHypothesis(session: SituationAnalysisSession, clarification: string, preferences: CommunicationPreferences = {}) {
   const trigger = extractShortTrigger(clarification);
-  return `Правильно понимаю: когда «${trigger}», первой включается ${signalLabels[session.signal]}, а затем появляется желание ${urgeLabels[session.urge]}? Если это неточно, поправьте одним предложением.`;
+  return `Правильно понимаю: когда «${trigger}», первой включается ${signalLabels[session.signal]}, а затем появляется желание ${urgeLabels[session.urge]}? ${systemPrompt(preferences, "hypothesisCorrection")}`;
 }
 
-export function complexAnalysisQuestion(stage: SituationAnalysisStage) {
+export function complexAnalysisQuestion(stage: SituationAnalysisStage, preferences: CommunicationPreferences = {}) {
   switch (stage) {
-    case "chain_trigger": return "Возьмём один конкретный эпизод. Что произошло непосредственно перед тем, как Вы застряли или отреагировали?";
+    case "chain_trigger": return systemPrompt(preferences, "chainTrigger");
     case "chain_thought": return "Что в тот момент мелькнуло в голове? Можно записать точную фразу, образ или смысл.";
     case "chain_emotion_body": return "Какие эмоции и ощущения в теле появились сразу после этой мысли?";
-    case "chain_urge": return "Что Вам захотелось сделать в этот момент — отложить, отвлечься, уйти, спорить или что-то другое?";
-    case "chain_action": return "Что Вы фактически сделали после этого — даже если действием было ничего не делать?";
+    case "chain_urge": return systemPrompt(preferences, "chainUrge");
+    case "chain_action": return systemPrompt(preferences, "chainAction");
     case "chain_consequences": return "Что это дало сразу и к чему привело позже? Например: сначала стало легче, но задача осталась.";
-    default: return "Продолжите описание этого эпизода своими словами.";
+    default: return systemPrompt(preferences, "chainContinue");
   }
 }
 
@@ -189,9 +190,9 @@ export function readSituationChain(session: SituationAnalysisSession): Situation
   try { return JSON.parse(session.chain_json) as SituationChain; } catch { return {}; }
 }
 
-export function buildChainHypothesis(session: SituationAnalysisSession, chain: SituationChain) {
-  const correction = chain.correction ? `\nВаше уточнение: ${chain.correction}.` : "";
-  return `Собрал цепочку как рабочую гипотезу:\nСобытие: ${chain.trigger ?? "не уточнено"}.\nМысль или смысл: ${chain.thought ?? "не уточнено"}.\nЭмоции и тело: ${chain.emotionBody ?? "не уточнено"}.\nИмпульс: ${chain.urge ?? "не уточнено"}.\nДействие: ${chain.action ?? "не уточнено"}.\nПоследствия: ${chain.consequences ?? "не уточнено"}.${correction}\nТочка для вмешательства — после первого сигнала и до привычного действия. Это похоже на Ваш опыт?`;
+export function buildChainHypothesis(session: SituationAnalysisSession, chain: SituationChain, preferences: CommunicationPreferences = {}) {
+  const correction = chain.correction ? `\n${systemPrompt(preferences, "correctionLabel")} ${chain.correction}.` : "";
+  return `Собрал цепочку как рабочую гипотезу:\nСобытие: ${chain.trigger ?? "не уточнено"}.\nМысль или смысл: ${chain.thought ?? "не уточнено"}.\nЭмоции и тело: ${chain.emotionBody ?? "не уточнено"}.\nИмпульс: ${chain.urge ?? "не уточнено"}.\nДействие: ${chain.action ?? "не уточнено"}.\nПоследствия: ${chain.consequences ?? "не уточнено"}.${correction}\nТочка для вмешательства — после первого сигнала и до привычного действия. ${systemPrompt(preferences, "hypothesisConfirmation")}`;
 }
 
 const chainTransitions: Partial<Record<SituationAnalysisStage, { field: keyof SituationChain; next: SituationAnalysisStage }>> = {
@@ -210,14 +211,14 @@ const chainTransitions: Partial<Record<SituationAnalysisStage, { field: keyof Si
   edit_consequences: { field: "consequences", next: "chain_confirm" },
 };
 
-export async function advanceComplexAnalysis(session: SituationAnalysisSession, answer: string) {
+export async function advanceComplexAnalysis(session: SituationAnalysisSession, answer: string, preferences: CommunicationPreferences = {}) {
   const transition = chainTransitions[session.stage];
   if (!transition) throw new Error("Этап поведенческой цепочки не найден.");
   const chain = { ...readSituationChain(session), [transition.field]: answer };
-  const hypothesis = transition.next === "chain_confirm" ? buildChainHypothesis(session, chain) : session.hypothesis;
+  const hypothesis = transition.next === "chain_confirm" ? buildChainHypothesis(session, chain, preferences) : session.hypothesis;
   await getRawDb().prepare("UPDATE conversation_analysis_sessions SET stage=?,chain_json=?,hypothesis=?,updated_at=? WHERE id=? AND status='pending'")
     .bind(transition.next, JSON.stringify(chain), hypothesis, new Date().toISOString(), session.id).run();
-  return transition.next === "chain_confirm" ? hypothesis : complexAnalysisQuestion(transition.next);
+  return transition.next === "chain_confirm" ? hypothesis : complexAnalysisQuestion(transition.next, preferences);
 }
 
 export function isHypothesisConfirmed(text: string) {
@@ -261,7 +262,7 @@ export function parseChainEditField(text: string): ChainEditField | null {
   return null;
 }
 
-export async function chooseChainEditField(session: SituationAnalysisSession, field: ChainEditField) {
+export async function chooseChainEditField(session: SituationAnalysisSession, field: ChainEditField, preferences: CommunicationPreferences = {}) {
   const stage = chainEditStages[field];
   await getRawDb().prepare("UPDATE conversation_analysis_sessions SET stage=?,updated_at=? WHERE id=? AND status='pending'")
     .bind(stage, new Date().toISOString(), session.id).run();
@@ -270,7 +271,7 @@ export async function chooseChainEditField(session: SituationAnalysisSession, fi
     thought: "Какая мысль, фраза или смысл точнее описывает этот момент?",
     emotionBody: "Какие эмоции и ощущения в теле точнее описывают этот момент?",
     urge: "Какой импульс или желание возникло на самом деле?",
-    action: "Что Вы фактически сделали?",
+    action: systemPrompt(preferences, "editAction"),
     consequences: "Что это дало сразу и к чему привело позже?",
   };
   return labels[field];
@@ -324,12 +325,12 @@ export async function recentBehavioralPatterns(userId: string): Promise<Behavior
   return rows.results;
 }
 
-export function behavioralMemoryPrompt(pattern: BehavioralPattern) {
+export function behavioralMemoryPrompt(pattern: BehavioralPattern, preferences: CommunicationPreferences = {}) {
   const frequency = Number(pattern.occurrence_count) >= 2
     ? `Это повторялось в ${pattern.occurrence_count} подтверждённых разборах.`
     : "Это было в одном предыдущем подтверждённом разборе.";
   const remembered = pattern.thought || pattern.urge || pattern.action;
-  return `Небольшая проверка памяти: раньше в похожей ситуации Вы описывали «${remembered}». ${frequency} Не буду считать, что сейчас всё так же — проверим текущий эпизод заново.`;
+  return `${systemPrompt(preferences, "memoryPrefix")} «${remembered}». ${frequency} Не буду считать, что сейчас всё так же — проверим текущий эпизод заново.`;
 }
 
 export async function behavioralPatternById(userId: string, id: string): Promise<BehavioralPattern | null> {
@@ -349,7 +350,7 @@ export async function dismissBehavioralMemory(userId: string, analysisId: string
   ).bind(new Date().toISOString(), analysisId, userId).run();
 }
 
-export async function applyBehavioralMemoryDraft(session: SituationAnalysisSession, pattern: BehavioralPattern) {
+export async function applyBehavioralMemoryDraft(session: SituationAnalysisSession, pattern: BehavioralPattern, preferences: CommunicationPreferences = {}) {
   if (session.analysis_depth !== "complex" || session.memory_pattern_id !== pattern.id) {
     throw new Error("Это воспоминание нельзя применить к текущему разбору.");
   }
@@ -361,11 +362,11 @@ export async function applyBehavioralMemoryDraft(session: SituationAnalysisSessi
     action: pattern.action,
     consequences: pattern.consequences,
   };
-  const hypothesis = buildChainHypothesis(session, chain);
+  const hypothesis = buildChainHypothesis(session, chain, preferences);
   await getRawDb().prepare(
     "UPDATE conversation_analysis_sessions SET stage='chain_confirm',chain_json=?,hypothesis=?,memory_dismissed=1,updated_at=? WHERE id=? AND user_id=? AND status='pending'",
   ).bind(JSON.stringify(chain), hypothesis, new Date().toISOString(), session.id, session.user_id).run();
-  return `Возьмём прошлую цепочку как черновик и не будем повторять все вопросы. Проверьте, подходит ли она к текущему эпизоду.\n\n${hypothesis}`;
+  return `${systemPrompt(preferences, "memoryDraft")}\n\n${hypothesis}`;
 }
 
 export async function saveSituationHypothesis(id: string, clarification: string, hypothesis: string) {

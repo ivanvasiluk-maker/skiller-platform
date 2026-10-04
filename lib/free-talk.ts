@@ -1,3 +1,4 @@
+import { communicationInstructions, type CommunicationPreferences } from "./communication-preferences.ts";
 // Free Talk: генерация ответа тренера с Bible-driven инструкциями,
 // Zod-валидацией структуры, пост-проверкой guardrails и deterministic fallback.
 // fetch инъецируется для тестов и интеграционных сценариев (timeout/malformed/hostile).
@@ -12,7 +13,7 @@ import {
 } from "./character-bible.ts";
 import { interactionModes, type TrainerId } from "./trainers.ts";
 
-export type FreeTalkProfile = {
+export type FreeTalkProfile = CommunicationPreferences & {
   trainer_id: TrainerId;
   interaction_mode: InteractionMode;
 };
@@ -29,7 +30,9 @@ export async function produceFreeTalkReply(input: {
   instructionsOverride?: string;
 }): Promise<string> {
   const bible = getCharacterBible(input.profile.trainer_id);
-  const fallback = buildFreeTalkFallback(bible);
+  const fallback = input.profile.address_form === "informal"
+    ? "Можно продолжить с текущего места. Что тебе сейчас полезнее: разговор, разбор одного эпизода или маленькое действие?"
+    : buildFreeTalkFallback(bible);
   // Модуль должен работать и в Node (Next runtime), и в чистом workerd
   // (интеграционный worker), где глобального process нет.
   const aiDisabled =
@@ -46,11 +49,11 @@ export async function produceFreeTalkReply(input: {
         store: false,
         max_output_tokens: 450,
         instructions:
-          input.instructionsOverride ??
+          (input.instructionsOverride ??
           buildFreeTalkInstructions(
             bible,
             interactionModes[input.profile.interaction_mode],
-          ),
+          )) + "\n" + communicationInstructions(input.profile),
         input: input.messages.map((m) => ({ role: m.role, content: m.text })),
         text: {
           format: {
