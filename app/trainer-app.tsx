@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { QuickStop } from "./quick-stop";
+import { StopExample } from "./stop-example";
 import { MicroStartExample } from "./micro-start-example";
 import { PracticeDirection } from "./practice-direction";
 import { useEffect, useRef, useState } from "react";
@@ -241,7 +242,15 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   }
 
   return <div className="trainer-shell" style={{ "--trainer-color": trainer.color, "--trainer-bg": trainer.background } as React.CSSProperties}>
-    <QuickStop />
+    <QuickStop
+      disabled={busy}
+      practiceLabel={pending ? "Вернуться к своей практике" : "Разобрать свою ситуацию с тренером"}
+      onPractice={profile ? () => {
+        // A quick reference never creates an attempt or replaces an open plan.
+        if (pending) { setMode(pending.entry_mode as EntryMode); setScreen("conversation"); }
+        else enter("distress");
+      } : undefined}
+    />
     <header className="trainer-header"><Link className="trainer-logo" href="/">skiller<span>●</span></Link><span className="trainer-header-note">маленькие действия · реальные изменения</span>{profile && <button className="trainer-icon-button" aria-label="Настройки тренера" onClick={() => setSettings(!settings)}><Settings2 size={21}/></button>}</header>
     {error && <div className="trainer-error" role="alert">{error}<button onClick={refresh}>Обновить данные</button></div>}
     {notice && <div className="trainer-notice" role="status">{notice}<button aria-label="Закрыть уведомление" onClick={() => setNotice("")}><X size={16}/></button></div>}
@@ -293,6 +302,7 @@ function PlanCard({ plan, plannedAction, busy, command }: { plan: TrainerPlan; p
       <p className="trainer-decision-reason"><strong>{concreteAction ? `Навык для тренировки: ${skill.title}` : "Почему такой шаг"}</strong><span>{concreteAction ? skill.description : explainDecisionReason(plan.decision_reason_code)}</span></p>
       {concreteAction && <ol><li><strong>{concreteAction}</strong><p>Не нужно продолжать автоматически. Сначала зафиксируйте результат этого действия.</p></li></ol>}
       {skill.id === "micro-start" && <MicroStartExample plannedAction={concreteAction} />}
+      {skill.id === "stop" && <StopExample plannedAction={concreteAction} />}
       <span className="trainer-kicker">ШАГИ ПРАКТИКИ</span>
       <ol>{skill.steps.map((step) => <li key={step.title}><strong>{step.title}</strong><p>{step.copy}</p></li>)}</ol>
       {!plan.attempt_id ? (
