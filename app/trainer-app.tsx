@@ -13,6 +13,7 @@ import type { TrainerState, TrainerPlan } from "@/lib/trainer-data";
 import { explainDecisionReason } from "@/lib/trainer-continuity";
 import { meaningfulVoiceTranscript } from "@/lib/voice-transcript";
 import type { SkillView } from "@/lib/skiller-data";
+import { draftKey, readDraft } from "@/lib/trainer-draft";
 import "./trainer.css";
 
 const entries: { id: EntryMode; title: string; copy: string; mark: string }[] = [
@@ -54,6 +55,8 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   const [step, setStep] = useState(-1);
   const [consent, setConsent] = useState(false);
   const [text, setText] = useState("");
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftStorageUnavailable, setDraftStorageUnavailable] = useState(false);
   const [intensity, setIntensity] = useState(5);
   const [risk, setRisk] = useState("unknown");
   const [kind, setKind] = useState("stuck");
@@ -77,6 +80,30 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   const openLoop = state.continuity.openLoop;
   const analysisPending = Boolean(state.pendingFollowUp || state.pendingSituationAnalysis);
   const sendDisabled = busy || recording || text.trim().length < 3 || (!analysisPending && mode !== "talk" && risk === "unknown") || (!analysisPending && mode !== "talk" && Boolean(pending));
+  // Bind a draft to the latest server question, including questions within one stage.
+  const draftContext = JSON.stringify([state.pendingSituationAnalysis?.id ?? null, state.pendingSituationAnalysis?.stage ?? null, state.pendingFollowUp?.id ?? null, pending?.id ?? null, pending?.reported_result ?? null, state.messages.at(-1)?.id ?? null]);
+  const initialDraftContext = useRef(draftContext);
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      if (!initialState.profile) { setDraftReady(true); return; }
+      try {
+        const key = draftKey(initialState.profile.user_id);
+        const draft = readDraft(localStorage.getItem(key), initialDraftContext.current);
+        if (draft) { setText(draft.text); setMode(draft.mode); setScreen("conversation"); }
+        else localStorage.removeItem(key);
+      } catch { setDraftStorageUnavailable(true); }
+      setDraftReady(true);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [initialState.profile]);
+  useEffect(() => {
+    if (!draftReady || !profile) return;
+    try {
+      const key = draftKey(profile.user_id);
+      if (text.trim()) localStorage.setItem(key, JSON.stringify({ version: 1, context: draftContext, text, mode, updatedAt: Date.now() }));
+      else localStorage.removeItem(key);
+    } catch { queueMicrotask(() => setDraftStorageUnavailable(true)); }
+  }, [draftReady, profile, draftContext, text, mode]);
   const day2CheckIn = state.continuity.day2CheckIn;
   const days4to6 = state.continuity.days4to6;
   const gapReturn = state.continuity.gapReturn;
@@ -91,6 +118,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
       const response = await fetch("/api/trainer", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ ...payload, requestId: crypto.randomUUID(), sessionId: sessionRef.current }), signal: AbortSignal.timeout(25000) });
       const result = await response.json() as TrainerState & { error?: string };
       if (!response.ok) throw new Error(result.error || "Не удалось сохранить");
+      if (result.messages.at(-1)?.id !== state.messages.at(-1)?.id) setText("");
       setState(result); return result;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Не удалось сохранить. Попробуйте обновить данные.");
@@ -103,9 +131,12 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
     if (node) node.scrollTop = node.scrollHeight;
   }, [state.messages.length, busy, screen]);
   useEffect(() => {
-    sessionRef.current = sessionStorage.getItem("skiller-session") || crypto.randomUUID();
-    sessionStorage.setItem("skiller-session", sessionRef.current);
-    if (initialState.profile) void command({ action: "open" });
+    try {
+      sessionRef.current = sessionStorage.getItem("skiller-session") || crypto.randomUUID();
+      sessionStorage.setItem("skiller-session", sessionRef.current);
+    } catch { sessionRef.current = crypto.randomUUID(); }
+    const openFrame = requestAnimationFrame(() => { if (initialState.profile) void command({ action: "open" }); });
+    return () => cancelAnimationFrame(openFrame);
     // Log once per browser session; backend deduplicates the event.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -115,7 +146,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   }
   function enter(value: EntryMode, depth: "simple" | "complex" = "simple") { setMode(value); setKind(value === "distress" ? "emotion" : "stuck"); setRisk("unknown"); setAnalysisDepth(depth); setScreen("conversation"); }
   async function send() {
-    if (sendDisabled) return;
+    if (!draftReady || sendDisabled) return;
     const result = await command({ action: mode === "talk" || analysisPending ? "message" : "situation", text, mode, kind, signal, urge, intensity, risk, analysisDepth });
     if (result) setText("");
   }
@@ -284,6 +315,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
           {pending && <PlanCard key={pending.id} plan={pending} plannedAction={state.openLoops.find(loop => loop.plan_id === pending.id)?.planned_action} busy={busy} command={command}/>}
           {!analysisPending && !pending && latest?.result === "failed" && <section className="trainer-panel"><h2>Изменим размер шага?</h2><p>{trainer.failure}</p><div className="trainer-actions"><button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "resize", planId: latest.id })}>Упростить до первого шага</button><button disabled={busy} className="trainer-secondary" onClick={() => command({ action: "replace", planId: latest.id })}>Попробовать другой навык</button></div></section>}
           <form className="trainer-composer" onSubmit={e => { e.preventDefault(); void send(); }}><label className="trainer-label" htmlFor="message">{analysisPending ? "Ваш ответ" : mode === "talk" ? "Что у Вас на уме?" : "Один конкретный эпизод"}</label><textarea ref={composerRef} id="message" rows={3} className="trainer-input" maxLength={1200} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey) && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); } }} placeholder={analysisPending ? "Ответьте своими словами или продиктуйте…" : "Можно написать или продиктовать сообщение…"}/>
+          {text.trim() && <p className="trainer-draft-note">{draftStorageUnavailable ? "Сохранение черновика на устройстве недоступно. Скопируйте текст перед закрытием." : "Черновик хранится на этом устройстве. Восстановить его можно в течение 7 дней; он ещё не отправлен."} <button type="button" className="trainer-chip" disabled={busy || recording} onClick={() => setText("")}>Удалить черновик</button></p>}
           {mode !== "talk" && !analysisPending && <div className="trainer-capture"><label htmlFor="capture-kind">Ситуация<select id="capture-kind" value={kind} onChange={e => setKind(e.target.value)}><option value="stuck">Не могу начать</option><option value="emotion">Сильная эмоция</option><option value="conflict">Конфликт</option><option value="other">Другое</option></select></label><label htmlFor="capture-signal">Что первым замечаете?<select id="capture-signal" value={signal} onChange={e => setSignal(e.target.value)}><option value="thought">Мысль</option><option value="body">Ощущение в теле</option><option value="emotion">Эмоцию</option><option value="urge">Импульс</option></select></label><label htmlFor="capture-urge">Что хочется сделать?<select id="capture-urge" value={urge} onChange={e => setUrge(e.target.value)}><option value="avoid">Отложить / замереть</option><option value="distract">Отвлечься</option><option value="attack">Спорить / доказывать</option><option value="withdraw">Уйти / закрыться</option></select></label><Score label="Интенсивность сейчас" value={intensity} onChange={setIntensity}/><label className="trainer-risk" htmlFor="capture-risk">Есть риск причинить вред себе или другому?<select id="capture-risk" value={risk} onChange={e => setRisk(e.target.value)}><option value="unknown">Выберите ответ</option><option value="no">Нет</option><option value="yes">Да / не уверен</option></select></label></div>}
           <div className="trainer-row"><span className="trainer-caption">{recording ? "Идёт запись. Нажмите ещё раз, чтобы остановить." : analysisPending ? "Ответ сохранится в памяти этого эпизода." : mode === "talk" ? "Можно написать или продиктовать. Перед отправкой расшифровку можно исправить." : analysisDepth === "complex" ? "Разберём цепочку по шагам, затем выберем точку для практики." : "Сначала проверим состояние, затем предложим шаг."}</span><div className="trainer-row" style={{gap:8}}><button type="button" aria-label={recording ? "Остановить запись" : "Записать голосом"} aria-pressed={recording} className="trainer-icon-button" onClick={() => void toggleRecording()}>{recording ? <MicOff size={18}/> : <Mic size={18}/>}</button><button className="trainer-primary" disabled={sendDisabled}>{busy ? "Подождём ответ…" : analysisPending ? "Ответить" : mode === "talk" ? "Отправить" : analysisDepth === "complex" ? "Начать подробный разбор" : "Подобрать шаг"}<ArrowUpRight size={17}/></button></div></div>{voiceError && <p className="trainer-caption" role="status">{voiceError}</p>}</form><div className="trainer-actions"><button className="trainer-link" onClick={() => enter("talk")}><MessageCircle size={16}/> Задать вопрос тренеру</button><button className="trainer-link" onClick={() => enter("stuck", "complex")}>Подробно разобрать ситуацию</button><button className="trainer-link" onClick={() => enter("distress")}>Помочь с состоянием</button></div></>}
         </>}
