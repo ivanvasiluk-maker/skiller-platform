@@ -539,6 +539,9 @@ try {
     }
   }
 
+  const newSituation = await runEndpoint(baseUrl, "new-situation-cycle");
+  for (const [key, value] of Object.entries(newSituation)) assert.equal(value, true, `New situation: ${key}`);
+
   const simpleAnalysis = await runEndpoint(baseUrl, "simple-analysis-cycle");
   assert.deepEqual(simpleAnalysis, {
     returnCycle: {

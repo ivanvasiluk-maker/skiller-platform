@@ -1250,6 +1250,28 @@ async function runQuickStopCycle() {
   return { cases, safetyBlocked: Boolean(unsafe.profile?.safety_flag) && unsafe.plans.length === 0 };
 }
 
+async function runNewSituationCycle() {
+  const id = crypto.randomUUID();
+  const user = { userId: `new-situation-${id}`, displayName: "New Situation", email: `${id}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "beck", text: "Откладываю работу", consent: true });
+  const original = await command({ action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю отчёт и открываю новости" });
+  const oldId = original.pendingSituationAnalysis?.id;
+  if (!oldId) throw new Error("Missing initial analysis");
+  let staleBlocked = false;
+  try { await command({ action: "newSituation", analysisId: crypto.randomUUID() }); } catch { staleBlocked = true; }
+  const requestId = crypto.randomUUID();
+  const fresh = await command({ action: "newSituation", analysisId: oldId, requestId });
+  const duplicate = await command({ action: "newSituation", analysisId: oldId, requestId });
+  const next = await command({ action: "situation", analysisDepth: "simple", mode: "distress", kind: "emotion", signal: "emotion", urge: "withdraw", intensity: 5, risk: "no", text: "Расстроился после разговора с другом" });
+  const hypothesized = await command({ action: "message", mode: "distress", text: "Мне кажется, меня не услышали" });
+  const planned = await command({ action: "message", mode: "distress", text: "Да, похоже" });
+  let planBlocked = false;
+  try { await command({ action: "newSituation" }); } catch { planBlocked = true; }
+  return { staleBlocked, oldAnalysisClosed: !fresh.pendingSituationAnalysis, noFakeResult: fresh.plans.length === 0, idempotent: fresh.messages.length === duplicate.messages.length, separateAnalysis: next.pendingSituationAnalysis?.id !== oldId && next.pendingSituationAnalysis?.original_text === "Расстроился после разговора с другом", hypothesisSeparate: hypothesized.pendingSituationAnalysis?.id === next.pendingSituationAnalysis?.id, planBlocked: planBlocked && planned.plans.some(plan => !plan.result) };
+}
+
 async function runSimpleAnalysisCycle(db: D1Database) {
   const suffix = crypto.randomUUID();
   const user = {
@@ -1567,6 +1589,7 @@ const worker: ExportedHandler<Env> = {
     if (request.method === "POST" && url.pathname === "/quick-stop-cycle") {
       return Response.json(await runQuickStopCycle());
     }
+    if (request.method === "POST" && url.pathname === "/new-situation-cycle") return Response.json(await runNewSituationCycle());
     if (request.method === "POST" && url.pathname === "/simple-analysis-cycle") {
       return Response.json(await runSimpleAnalysisCycle(env.DB));
     }

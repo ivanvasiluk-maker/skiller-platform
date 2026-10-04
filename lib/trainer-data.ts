@@ -177,7 +177,7 @@ async function createRecommendedPlan(input: {
 }
 
 const bodySchema = z.object({
-  action: z.enum(["onboard", "settings", "open", "message", "situation", "confirmMemory", "dismissMemory", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain", "quickStop", "performance"]),
+  action: z.enum(["onboard", "settings", "open", "message", "situation", "confirmMemory", "dismissMemory", "start", "outcome", "reject", "resize", "replace", "recap", "feedback", "safeAgain", "quickStop", "performance", "newSituation"]),
   requestId: z.string().uuid(), sessionId: z.string().uuid(),
   name: z.string().trim().min(1).max(60).optional(), trainerId: z.enum(["marsha", "beck", "skinny"]).optional(),
   interactionMode: z.enum(["support", "explore", "direct"]).optional(), text: z.string().trim().max(1200).optional(), consent: z.boolean().optional(),
@@ -186,6 +186,7 @@ const bodySchema = z.object({
   signal: z.enum(["thought", "body", "emotion", "urge"]).optional(), urge: z.enum(["avoid", "distract", "attack", "withdraw"]).optional(),
   analysisDepth: z.enum(["simple", "complex", "direct"]).optional(),
   planId: z.string().uuid().optional(), result: z.enum(["done", "failed", "more", "partial"]).optional(),
+  analysisId: z.string().uuid().optional(),
   worsened: z.boolean().optional(),
   helpfulness: z.number().int().min(0).max(10).optional(), understood: z.number().int().min(0).max(10).optional(), continueIntent: z.number().int().min(0).max(10).optional(),
   helped: z.string().max(800).optional(), annoyed: z.string().max(800).optional(), recapDay: z.union([z.literal(3), z.literal(7)]).optional(),
@@ -215,6 +216,15 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
     }
     if (!profile) throw new Error("Сначала познакомьтесь с тренером.");
     const key = body.requestId;
+    if (body.action === "newSituation") {
+      const current = await trainerState(user);
+      if (profile.safety_flag) throw new Error("Сначала вернитесь к вопросу безопасности.");
+      if (current.plans.some(plan => !plan.result) || current.pendingFollowUp) throw new Error("Сначала отметьте результат текущей практики или завершите его обсуждение. Новый разбор не заменяет этот ответ.");
+      const analysis = current.pendingSituationAnalysis;
+      if ((analysis?.id ?? undefined) !== body.analysisId) throw new Error("Текущий разбор изменился. Обновите данные перед началом новой ситуации.");
+      if (analysis) await completeSituationAnalysis(analysis.id);
+      await message(profile, "assistant", "Начинаем отдельную ситуацию. Что сейчас трудно? Предыдущий разбор оставлен без результата; его сообщения сохранены.", `${key}:new-situation`);
+    }
     if (body.action === "settings") {
       await persistTrainerSettings({
         db,

@@ -46,6 +46,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   const [state, setState] = useState(initialState);
   const [screen, setScreen] = useState<"home" | "conversation" | "trainers" | "journal" | "recap">("home");
   const [mode, setMode] = useState<EntryMode>("stuck");
+  const [choosingNewSituation, setChoosingNewSituation] = useState(false);
   const [settings, setSettings] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -145,6 +146,18 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
     catch { setError("Сервер недоступен. Попробуйте ещё раз позже."); }
   }
   function enter(value: EntryMode, depth: "simple" | "complex" = "simple") { setMode(value); setKind(value === "distress" ? "emotion" : "stuck"); setRisk("unknown"); setAnalysisDepth(depth); setScreen("conversation"); }
+  function continueSituation() {
+    setChoosingNewSituation(false);
+    setMode(state.pendingSituationAnalysis?.mode ?? (pending?.entry_mode as EntryMode | undefined) ?? "talk");
+    setScreen("conversation");
+  }
+  async function startNewSituation() {
+    const result = await command({ action: "newSituation", ...(state.pendingSituationAnalysis ? { analysisId: state.pendingSituationAnalysis.id } : {}) });
+    if (!result) return;
+    setText(""); setChoosingNewSituation(false);
+    enter("stuck");
+    requestAnimationFrame(() => composerRef.current?.focus());
+  }
   async function send() {
     if (!draftReady || sendDisabled) return;
     const result = await command({ action: mode === "talk" || analysisPending ? "message" : "situation", text, mode, kind, signal, urge, intensity, risk, analysisDepth });
@@ -275,6 +288,13 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
   }
 
   return <div className="trainer-shell" style={{ "--trainer-color": trainer.color, "--trainer-bg": trainer.background } as React.CSSProperties}>
+    {profile && <section className="trainer-notice" aria-label="Выбор ситуации">
+      {choosingNewSituation ? <div><p>Оставить текущий разбор без результата и начать другой? Его сообщения сохранятся. Неотправленный черновик будет удалён.</p><div className="trainer-actions"><button className="trainer-secondary" disabled={busy || recording} onClick={continueSituation}>Продолжить текущий разбор</button><button className="trainer-primary" disabled={busy || recording} onClick={() => void startNewSituation()}>Начать другую ситуацию</button></div></div> : <div className="trainer-actions">
+        <button className="trainer-secondary" disabled={busy || recording} onClick={continueSituation}>Продолжить</button>
+        <button className="trainer-secondary" disabled={busy || recording || Boolean(profile.safety_flag) || Boolean(pending) || Boolean(state.pendingFollowUp)} onClick={() => { setScreen("conversation"); setChoosingNewSituation(true); }}>Новая ситуация</button>
+        {(pending || state.pendingFollowUp) && <p>Новый разбор будет доступен после результата текущей практики и его обсуждения.</p>}
+      </div>}
+    </section>}
     <QuickStop
       disabled={busy}
       onPrepare={profile && !pending && !analysisPending && !profile.safety_flag ? async input => {
