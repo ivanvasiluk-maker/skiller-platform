@@ -212,6 +212,10 @@ try {
   assert.equal(releaseSafety.status, 200, await releaseSafety.clone().text());
   assert.deepEqual(await releaseSafety.json(), { riskTextBlocked: true, escalatedStartBlocked: true, crossUserStartBlocked: true, profileFlagBlocked: true, attempts: 0 });
 
+  const readiness = await fetch(`${baseUrl}/release-readiness`, { method: "POST" });
+  assert.equal(readiness.status, 200, (await readiness.clone().text()).slice(0,1000));
+  assert.deepEqual(await readiness.json(), { erasure: true, aliases: true, rollback: true, unknownTableBlocked: true, otherUserPreserved: true, offerAfterPractice: true, crisisExcluded: true, leadIdempotent: true, manualConfirmation: true });
+
   const firstTry = await runScenario(baseUrl, "first_try");
   assert.deepEqual(firstTry, {
     prior: null,

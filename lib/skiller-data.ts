@@ -1,3 +1,5 @@
+import { env } from "cloudflare:workers";
+import { assertDataWritable } from "./privacy-data";
 import { requiresSafetyRoute } from "./trainers";
 import { displaySkillSteps } from "./skill-instruction-copy";
 import { and, desc, eq, sql } from "drizzle-orm";
@@ -235,6 +237,7 @@ const seedSkills = [
 
 export async function ensureUser(user: ChatGPTUser) {
   await ensureStorage();
+  await assertDataWritable(getRawDb(), user.userId, (env as unknown as { SKILLER_MAINTENANCE?: string }).SKILLER_MAINTENANCE === "1");
   const db = getDb();
   await db
     .insert(users)

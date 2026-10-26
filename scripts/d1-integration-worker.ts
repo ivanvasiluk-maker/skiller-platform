@@ -1,3 +1,6 @@
+import { consumeUsage, userUsageBuckets } from "../lib/usage-limits";
+import { ERASURE_TABLES, privacyStatus, requestErasure, purgeAccount } from "../lib/privacy-data";
+import { createGroupRequest, groupEligibility, updateGroupRequest } from "../lib/group-requests";
 import {
   decideRecommendationFromD1,
   type D1RecommendationDecision,
@@ -1645,6 +1648,7 @@ const worker: ExportedHandler<Env> = {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
       return Response.json(row);
     }
+    if (request.method === "POST" && url.pathname === "/release-readiness") { try { return Response.json(await runReleaseReadiness(env.DB)); } catch (error) { return Response.json({ error: String(error), stack: error instanceof Error ? error.stack : "" }, { status: 500 }); } }
     if (request.method === "POST" && url.pathname === "/release-safety") return Response.json(await runReleaseSafety(env.DB));
     if (request.method === "POST" && url.pathname === "/pilot-analytics") {
       return Response.json(await runPilotAnalytics(env.DB));
@@ -1771,3 +1775,87 @@ async function runReleaseSafety(db: D1Database) {
 }
 
 export default worker;
+
+async function runReleaseReadiness(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const quotaId = `quota-${suffix}`;
+  const quotaNow = Date.now();
+  for (let i=0;i<30;i++) await consumeUsage(db, quotaId, "192.0.2.10", quotaNow);
+  let quotaDenied = false;
+  try { await consumeUsage(db, quotaId, "192.0.2.10", quotaNow); } catch { quotaDenied = true; }
+  if (!quotaDenied) throw new Error("Quota did not stop the 31st request");
+  await consumeUsage(db, quotaId, "192.0.2.10", quotaNow+86400000);
+  const concurrent = await Promise.allSettled(Array.from({ length: 31 }, () => consumeUsage(db, `concurrent-${suffix}`, null, quotaNow)));
+  if (concurrent.filter(x => x.status === "fulfilled").length !== 30) throw new Error("Concurrent quota is not atomic");
+  const quotaRows = await db.prepare("SELECT bucket FROM usage_limits").all<{ bucket: string }>();
+  if (JSON.stringify(quotaRows.results).includes(quotaId) || JSON.stringify(quotaRows.results).includes("192.0.2.10")) throw new Error("Quota stores raw identity");
+  const user = { userId: `readiness-${suffix}`, email: `${suffix}@example.invalid`, displayName: "Readiness", fullName: null };
+  const other = { ...user, userId: `${user.userId}-other`, email: `other-${suffix}@example.invalid` };
+  const sessionId = crypto.randomUUID();
+  const command = (raw: Record<string, unknown>, who = user) => trainerCommand(who, { requestId: crypto.randomUUID(), sessionId, ...raw });
+  await command({ action: "onboard", name: "Target", trainerId: "marsha", text: "Откладываю отчёт и читаю новости", consent: true });
+  const otherBefore = await command({ action: "onboard", name: "Keep", trainerId: "beck", text: "Эту запись нельзя удалять", consent: true }, other);
+  if (await groupEligibility(db, user.userId)) throw new Error("Offer before completed practice");
+  const planState = await command({ action: "quickStop", text: "Волнуюсь из-за рабочего отчёта", intensity: 6, risk: "no" });
+  const plan = planState.plans[0];
+  await command({ action: "start", planId: plan.id });
+  await command({ action: "performance", planId: plan.id, result: "done" });
+  const outcome = await command({ action: "outcome", planId: plan.id, result: "done", helpfulness: 7, intensity: 4 });
+  const pseudo = outcome.profile!.pseudonym;
+  await command({ action: "feedback", helpfulness: 7, understood: 8, continueIntent: 6, helped: "private-feedback", annoyed: "private" });
+  const parallelLeads = await Promise.all([createGroupRequest(db, user.userId, { contact: "@synthetic_example", consent: true }), createGroupRequest(db, user.userId, { contact: "@synthetic_example", consent: true })]);
+  if (parallelLeads[0].id !== parallelLeads[1].id) throw new Error("Concurrent duplicate lead created");
+  const lead = parallelLeads[0];
+  const duplicate = await createGroupRequest(db, user.userId, { contact: "@different_contact", consent: true });
+  if (lead.id !== duplicate.id) throw new Error("Duplicate lead created");
+  let rejected = false;
+  try { await updateGroupRequest(db, { id: lead.id, status: "confirmed" }); } catch { rejected = true; }
+  if (!rejected) throw new Error("Payment confirmed without verification");
+  await updateGroupRequest(db, { id: lead.id, status: "contacted" });
+  const confirmed = await updateGroupRequest(db, { id: lead.id, status: "confirmed", amountEur: 1, confirmationNote: "synthetic receipt only", paymentVerified: true });
+  if (confirmed.status !== "confirmed") throw new Error("Manual confirmation failed");
+  await command({ action: "message", text: "Я хочу умереть" });
+  if (await groupEligibility(db, user.userId)) throw new Error("Offer visible during safety flow");
+  await consumeUsage(db, user.userId, null);
+  const request = (await requestErasure(db, user.userId))!;
+  if ((await requestErasure(db, user.userId))?.id !== request.id) throw new Error("Erasure request is not idempotent");
+  rejected = false;
+  try { await command({ action: "settings", trainerId: "skinny" }); } catch { rejected = true; }
+  if (!rejected) throw new Error("Writes allowed after erasure request");
+  for (const input of [{ maintenance: false, mirrorsVerified: true }, { maintenance: true, mirrorsVerified: false }, { maintenance: true, mirrorsVerified: true }]) {
+    rejected = false;
+    try { await purgeAccount(db, request.id, input); } catch { rejected = true; }
+    if (!rejected) throw new Error("Purge precondition was ignored");
+  }
+  await db.prepare("UPDATE privacy_requests SET created_at=? WHERE id=?").bind(new Date(Date.now()-120000).toISOString(), request.id).run();
+  await db.prepare("CREATE TABLE erasure_unknown_fixture (user_id TEXT)").run();
+  rejected = false;
+  try { await purgeAccount(db, request.id, { maintenance: true, mirrorsVerified: true }); } catch { rejected = true; }
+  await db.prepare("DROP TABLE erasure_unknown_fixture").run();
+  if (!rejected) throw new Error("Unknown owned table was silently ignored");
+  // FK failure proves the batch rolls back rather than producing partial erasure.
+  await db.prepare("CREATE TABLE erasure_fk_fixture (owner TEXT REFERENCES users(id))").run();
+  await db.prepare("INSERT INTO erasure_fk_fixture (owner) VALUES (?)").bind(user.userId).run();
+  rejected = false;
+  try { await purgeAccount(db, request.id, { maintenance: true, mirrorsVerified: true }); } catch { rejected = true; }
+  if (!rejected || !await db.prepare("SELECT id FROM users WHERE id=?").bind(user.userId).first()) throw new Error("Erasure batch did not roll back");
+  const stillThere = await db.prepare("SELECT id FROM trainer_messages WHERE user_id=?").bind(user.userId).first();
+  if (!stillThere) throw new Error("Rollback lost messages");
+  await db.prepare("DROP TABLE erasure_fk_fixture").run();
+  await purgeAccount(db, request.id, { maintenance: true, mirrorsVerified: true });
+  for (const table of ERASURE_TABLES) {
+    if (!await db.prepare("SELECT name FROM sqlite_master WHERE name=?").bind(table).first()) continue;
+    const count = await db.prepare(`SELECT count(*) AS n FROM "${table}" WHERE user_id IN (?,?)`).bind(user.userId, pseudo).first<{ n: number }>();
+    if (count?.n) throw new Error(`Erasure left ${table}`);
+  }
+  if (await db.prepare("SELECT id FROM users WHERE id=?").bind(user.userId).first()) throw new Error("User identity remains");
+  const receipt = await db.prepare("SELECT user_id,pseudonym,status FROM privacy_requests WHERE id=?").bind(request.id).first<{ user_id: string | null; pseudonym: string | null; status: string }>();
+  if (receipt?.user_id || receipt?.pseudonym || receipt?.status !== "completed") throw new Error("Receipt retains identity");
+  if (await privacyStatus(db, user.userId)) throw new Error("Request retains old identity");
+  const buckets = await userUsageBuckets(user.userId);
+  for (const bucket of buckets) if (await db.prepare("SELECT bucket FROM usage_limits WHERE bucket=?").bind(bucket).first()) throw new Error("User quota identifier remains after erasure");
+  const otherAfter = await trainerState(other);
+  if (JSON.stringify(otherBefore.messages) !== JSON.stringify(otherAfter.messages) || otherAfter.profile?.name !== "Keep") throw new Error("Another account changed");
+  await purgeAccount(db, request.id, { maintenance: true, mirrorsVerified: true });
+  return { erasure: true, aliases: true, rollback: true, unknownTableBlocked: true, otherUserPreserved: true, offerAfterPractice: true, crisisExcluded: true, leadIdempotent: true, manualConfirmation: true };
+}
