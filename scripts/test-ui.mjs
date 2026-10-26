@@ -11,8 +11,8 @@ import { assertTestD1, TEST_DATABASE_ID, TEST_DATABASE_NAME } from './d1-test-gu
 // Fail before starting a worker or touching D1 if the browser is unavailable.
 const httpOnly = process.argv.includes('--http');
 if (!httpOnly) {
-  const { chromium } = await import('playwright');
-  const probe = await chromium.launch();
+  const { launchBrowser } = await import('./browser-launch.mjs');
+  const probe = await launchBrowser();
   await probe.close();
 }
 
@@ -44,7 +44,7 @@ try {
     find_additional_modules: true,
     rules: built.rules,
     assets: { directory: path.resolve(path.dirname(buildConfigPath), built.assets.directory) },
-    vars: { SKILLER_ENV: 'test', SKILLER_AI_DISABLED: '1' },
+    vars: { SKILLER_ENV: 'test', SKILLER_AI_DISABLED: '1', SKILLER_GROUP_OFFER_ENABLED: '1', GROUP_REQUESTS_ADMIN_SECRET: 'local-synthetic-owner', PRIVACY_ADMIN_SECRET: 'local-synthetic-privacy-owner' },
     d1_databases: [{ binding: 'DB', database_name: TEST_DATABASE_NAME,
       database_id: TEST_DATABASE_ID, migrations_dir: path.join(projectRoot, 'drizzle') }],
   }));

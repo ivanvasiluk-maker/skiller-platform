@@ -16,6 +16,7 @@ type ExportEnv = {
 };
 
 export async function POST(request: Request) {
+  if ((env as unknown as { SKILLER_MAINTENANCE?: string }).SKILLER_MAINTENANCE === "1") return Response.json({ error: "Экспорт приостановлен" }, { status: 503 });
   const secrets = env as unknown as ExportEnv;
   if (!secrets.EXPORT_CRON_SECRET) {
     return Response.json({ error: "Экспорт не настроен" }, { status: 503 });
