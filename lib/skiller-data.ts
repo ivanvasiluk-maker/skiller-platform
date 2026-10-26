@@ -1,3 +1,4 @@
+import { requiresSafetyRoute } from "./trainers";
 import { displaySkillSteps } from "./skill-instruction-copy";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { getDb, getRawDb } from "@/db";
@@ -569,12 +570,37 @@ function decisionReason(
     : baseReason;
 }
 
+const SAFETY_HOLD_DDL = "CREATE TABLE IF NOT EXISTS safety_holds (user_id TEXT PRIMARY KEY, active INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL)";
+
+export async function clearSafetyHold(userId: string) {
+  const db = getRawDb();
+  await db.prepare(SAFETY_HOLD_DDL).run();
+  await db.prepare("UPDATE safety_holds SET active=0,updated_at=? WHERE user_id=?").bind(new Date().toISOString(), userId).run();
+}
+
+async function hasSafetyFlag(userId: string) {
+  const db = getRawDb();
+  await db.prepare(SAFETY_HOLD_DDL).run();
+  const hold = await db.prepare("SELECT active FROM safety_holds WHERE user_id=?").bind(userId).first<{ active: number }>();
+  if (hold?.active) return true;
+  const exists = await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='trainer_profiles'").first();
+  if (!exists) return false;
+  const profile = await db.prepare("SELECT safety_flag FROM trainer_profiles WHERE user_id=?").bind(userId).first<{ safety_flag: number }>();
+  return Boolean(profile?.safety_flag);
+}
+
 export async function recommendSkill(user: ChatGPTUser, input: RecommendationInput): Promise<RecommendationResult> {
   await ensureUser(user);
   await ensureSkillCatalog();
   const db = getDb();
   const situationId = crypto.randomUUID();
-  const unsafe = input.risk !== "no";
+  const unsafe = requiresSafetyRoute(input.description, input.risk) || await hasSafetyFlag(user.userId);
+  if (unsafe) {
+    await getRawDb().prepare(SAFETY_HOLD_DDL).run();
+    await getRawDb().prepare("INSERT INTO safety_holds (user_id,active,updated_at) VALUES (?,1,?) ON CONFLICT(user_id) DO UPDATE SET active=1,updated_at=excluded.updated_at").bind(user.userId, new Date().toISOString()).run();
+    const table = await getRawDb().prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='trainer_profiles'").first();
+    if (table) await getRawDb().prepare("UPDATE trainer_profiles SET safety_flag=1 WHERE user_id=?").bind(user.userId).run();
+  }
   const baseSelection = unsafe
     ? { skillId: "", changePoint: "проверка безопасности", reason: "При возможном риске автоматический подбор навыков прекращается." }
     : selectSkill(input);
@@ -687,6 +713,13 @@ export async function deleteSituation(user: ChatGPTUser, situationId: string) {
 export async function startAttempt(user: ChatGPTUser, input: { skillId: string; situationId?: string; mode: string }) {
   await ensureUser(user);
   await ensureSkillCatalog();
+  if (await hasSafetyFlag(user.userId)) throw new Error("Практика приостановлена: сначала проверьте безопасность.");
+  if (input.situationId) {
+    const situation = await getDb().select().from(situations).where(and(eq(situations.id, input.situationId), eq(situations.userId, user.userId))).get();
+    if (!situation || situation.safetyStatus !== "self-guided") throw new Error("Безопасная ситуация не найдена.");
+  }
+  const skill = await getDb().select().from(skills).where(and(eq(skills.id, input.skillId), eq(skills.active, true))).get();
+  if (!skill) throw new Error("Навык недоступен.");
   const id = crypto.randomUUID();
   await getDb().insert(skillAttempts).values({
     id,

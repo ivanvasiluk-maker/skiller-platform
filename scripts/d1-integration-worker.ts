@@ -8,7 +8,7 @@ import {
 } from "../lib/request-idempotency";
 import { persistTrainerSettings } from "../lib/trainer-settings";
 import { dayIndex } from "../lib/trainers";
-import { completeAttempt, recommendSkill } from "../lib/skiller-data";
+import { completeAttempt, recommendSkill, startAttempt, ensureUser, ensureSkillCatalog } from "../lib/skiller-data";
 import {
   preparePilotEvent,
   recordPilotEvent,
@@ -22,7 +22,7 @@ import {
 import { requiresSafetyRoute, safetyMessage } from "../lib/trainers";
 import { produceFreeTalkReply } from "../lib/free-talk";
 import { buildFreeTalkFallback, getCharacterBible } from "../lib/character-bible";
-import { trainerCommand, trainerState, trainerHistory } from "../lib/trainer-data";
+import { trainerCommand, trainerState, trainerHistory, ensureTrainerStorage } from "../lib/trainer-data";
 import { buildConversationContext, renderConversationContext } from "../lib/conversation-orchestrator";
 import { runSheetsExport } from "../lib/sheets-exporter";
 import { createInMemorySheets } from "../lib/in-memory-sheets";
@@ -1645,6 +1645,7 @@ const worker: ExportedHandler<Env> = {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
       return Response.json(row);
     }
+    if (request.method === "POST" && url.pathname === "/release-safety") return Response.json(await runReleaseSafety(env.DB));
     if (request.method === "POST" && url.pathname === "/pilot-analytics") {
       return Response.json(await runPilotAnalytics(env.DB));
     }
@@ -1731,5 +1732,42 @@ const worker: ExportedHandler<Env> = {
     return Response.json(await runScenario(env.DB, body.scenario as Scenario));
   },
 };
+
+async function runReleaseSafety(db: D1Database) {
+  const id = `release-safety-${crypto.randomUUID()}`;
+  const user = { userId: id, email: `${id}@example.invalid`, displayName: "Safety", fullName: null };
+  await ensureUser(user);
+  await ensureSkillCatalog();
+  const input = { kind: "stuck", description: "Я хочу убить себя", firstSignal: "thought", actionUrge: "avoid", desiredDirection: "goal", importantGoal: "отчёт", intensity: 5, risk: "no" };
+  const blocked = await recommendSkill(user, input);
+  if (blocked.skill || blocked.safetyStatus !== "escalate") throw new Error("Risk text bypassed legacy recommendation gate");
+  let denied = false;
+  try { await startAttempt(user, { skillId: "micro-start", situationId: blocked.situationId, mode: "help" }); } catch { denied = true; }
+  if (!denied) throw new Error("Escalated situation allowed a practice");
+  denied = false;
+  try { await startAttempt(user, { skillId: "micro-start", mode: "practice" }); } catch { denied = true; }
+  if (!denied) throw new Error("Legacy-only risk hold bypassed by omitting the situation");
+  await db.prepare("DELETE FROM situations WHERE id=? AND user_id=?").bind(blocked.situationId, user.userId).run();
+  denied = false;
+  try { await startAttempt(user, { skillId: "micro-start", mode: "practice" }); } catch { denied = true; }
+  if (!denied) throw new Error("Deleting a situation cleared the safety hold");
+  const other = { ...user, userId: `${id}-other`, email: `${id}-other@example.invalid` };
+  await ensureUser(other);
+  const owner = { ...user, userId: `${id}-owner`, email: `${id}-owner@example.invalid` };
+  const safe = await recommendSkill(owner, { ...input, description: "Откладываю отчёт и читаю новости" });
+  denied = false;
+  try { await startAttempt(other, { skillId: "micro-start", situationId: safe.situationId, mode: "help" }); } catch { denied = true; }
+  if (!denied) throw new Error("Cross-user situation allowed a practice");
+  await ensureTrainerStorage();
+  await db.prepare("INSERT OR REPLACE INTO trainer_profiles (user_id,pseudonym,name,trainer_id,main_problem,consent_version,created_at,last_interaction_at,safety_flag) VALUES (?,?,?,'marsha',?,'release-test',?,?,1)").bind(id, crypto.randomUUID(), "Safety", "отчёт", new Date().toISOString(), new Date().toISOString()).run();
+  const flagged = await recommendSkill(user, { ...input, description: "Откладываю отчёт и читаю новости" });
+  if (flagged.skill || flagged.safetyStatus !== "escalate") throw new Error("Profile safety flag bypassed");
+  denied = false;
+  try { await startAttempt(user, { skillId: "micro-start", mode: "practice" }); } catch { denied = true; }
+  if (!denied) throw new Error("Safety flag bypassed with direct start");
+  const count = await db.prepare("SELECT count(*) AS n FROM skill_attempts WHERE user_id IN (?,?)").bind(id, other.userId).first<{ n: number }>();
+  if (count?.n !== 0) throw new Error("Blocked practice persisted an attempt");
+  return { riskTextBlocked: true, escalatedStartBlocked: true, crossUserStartBlocked: true, profileFlagBlocked: true, attempts: count.n };
+}
 
 export default worker;

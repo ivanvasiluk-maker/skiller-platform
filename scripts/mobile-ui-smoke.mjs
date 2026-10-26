@@ -11,11 +11,11 @@ try {
   for (const width of [360, 390, 1280]) {
     const context = await browser.newContext({
       viewport: { width, height: 844 },
-      extraHTTPHeaders: {
-        'oai-authenticated-user-id': `ui-smoke-${width}-${Date.now()}`,
-        'oai-authenticated-user-email': 'ui-smoke@example.invalid',
-      },
+
     });
+    // Use the real guest entry route, never a forged authentication header.
+    const entry = await context.request.get(new URL('/api/auth/guest', target).href, { maxRedirects: 0 });
+    assert.equal(entry.status(), 303);
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     const errors = [];

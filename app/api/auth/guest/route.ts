@@ -1,14 +1,16 @@
-const GUEST_COOKIE_NAME = "__Host-skiller_guest";
+import { GUEST_COOKIE_NAME, readGuestId } from "@/lib/guest-session";
+import { assertSameOrigin, boundaryResponse } from "@/lib/request-boundary";
 const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  try { assertSameOrigin(request); } catch (error) { return boundaryResponse(error); }
   const url = new URL(request.url);
   const returnTo = safeRelativeReturnPath(
     url.searchParams.get("return_to") ?? "/",
   );
-  const guestId = crypto.randomUUID();
+  const guestId = readGuestId(request.headers.get("cookie")) ?? crypto.randomUUID();
   const location = new URL(returnTo, url.origin).toString();
   const cookie = [
     `${GUEST_COOKIE_NAME}=${encodeURIComponent(guestId)}`,

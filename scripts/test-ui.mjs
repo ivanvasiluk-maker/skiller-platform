@@ -9,9 +9,12 @@ import { projectRoot } from './sites-env.mjs';
 import { assertTestD1, TEST_DATABASE_ID, TEST_DATABASE_NAME } from './d1-test-guard.mjs';
 
 // Fail before starting a worker or touching D1 if the browser is unavailable.
-const { chromium } = await import('playwright');
-const probe = await chromium.launch();
-await probe.close();
+const httpOnly = process.argv.includes('--http');
+if (!httpOnly) {
+  const { chromium } = await import('playwright');
+  const probe = await chromium.launch();
+  await probe.close();
+}
 
 const buildConfigPath = path.join(projectRoot, 'dist/server/wrangler.json');
 const built = JSON.parse(readFileSync(buildConfigPath, 'utf8'));
@@ -38,6 +41,8 @@ try {
     compatibility_date: built.compatibility_date,
     compatibility_flags: built.compatibility_flags,
     no_bundle: true,
+    find_additional_modules: true,
+    rules: built.rules,
     assets: { directory: path.resolve(path.dirname(buildConfigPath), built.assets.directory) },
     vars: { SKILLER_ENV: 'test', SKILLER_AI_DISABLED: '1' },
     d1_databases: [{ binding: 'DB', database_name: TEST_DATABASE_NAME,
@@ -54,7 +59,7 @@ try {
   const url = `http://127.0.0.1:${port}`;
   worker = spawn(process.execPath, [wrangler, 'dev', ...base, '--ip', '127.0.0.1',
     '--port', String(port), '--inspector-port', '0'],
-  { cwd: projectRoot, env: environment, stdio: ['ignore', 'ignore', 'inherit'] });
+  { cwd: projectRoot, env: environment, stdio: ['ignore', 'inherit', 'inherit'] });
   worker.on('error', error => { workerError = error; });
   const deadline = Date.now() + 60_000;
   let ready = false;
@@ -62,13 +67,13 @@ try {
     if (workerError) throw workerError;
     if (worker.exitCode !== null) throw new Error('Local UI worker exited before readiness');
     try {
-      const response = await fetch(url, { signal: AbortSignal.timeout(2000) });
-      if (response.ok) { ready = true; break; }
+      const response = await fetch(`${url}/api/trainer`, { signal: AbortSignal.timeout(2000) });
+      if (response.status === 401) { ready = true; break; }
     } catch { /* Worker is still starting. */ }
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   if (!ready) throw new Error('Local UI worker did not become ready within 60 seconds');
-  execFileSync(process.execPath, ['scripts/mobile-ui-smoke.mjs'], {
+  execFileSync(process.execPath, [httpOnly ? 'scripts/http-acceptance.mjs' : 'scripts/mobile-ui-smoke.mjs'], {
     cwd: projectRoot, env: { ...environment, SKILLER_UI_TEST_URL: url }, stdio: 'inherit',
   });
 } finally {

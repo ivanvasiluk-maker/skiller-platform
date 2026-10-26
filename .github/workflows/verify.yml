@@ -51,3 +51,6 @@ jobs:
 
       - name: Build production bundle
         run: npm run build
+
+      - name: Run isolated application HTTP acceptance
+        run: npm run test:http
