@@ -22,7 +22,7 @@
 - Последний доступный пилот: `codex/pilot-ui-verification-20261017`, `bb2892f43eec09487c82c86261d5db8201bd0a9d`. Это база текущих исправлений, **не main**.
 - [PR #40](https://github.com/ivanvasiluk-maker/skiller-platform/pull/40) направлен в `feat/pilot-short-rounds-2026-10-03`; [PR #39](https://github.com/ivanvasiluk-maker/skiller-platform/pull/39) — в `feat/conversation-relationship-layer` (`f979fdc`). На момент проверки оба открыты. Отдельный [PR #38](https://github.com/ivanvasiluk-maker/skiller-platform/pull/38) также открыт; его HEAD не является предком последнего пилота (`git merge-base --is-ancestor` → 1). Автоматически смешивать эти ветки нельзя.
 - Разница main → последний пилот: 95 файлов, 9034 добавленных и 172 удалённых строки. Часть «последних изменений» не присутствует в main.
-- Исправления: `codex/product-release-audit-20261026`, предполагаемая база PR — `codex/pilot-ui-verification-20261017`; PR ещё не создан. Перед выпуском владелец должен выбрать единую release-ветку; merge и deploy в этом цикле не выполняются.
+- Исправления: `codex/product-release-audit-20261026`, база [draft PR #41](https://github.com/ivanvasiluk-maker/skiller-platform/pull/41) — `codex/pilot-ui-verification-20261017`. Перед выпуском владелец должен выбрать единую release-ветку; merge и deploy в этом цикле не выполняются.
 
 Репозиторий `AFunc-OPC/Skiller` исключён: его README описывает настольный менеджер skills для AI CLI, а не психологический тренажёр. Issues 14/18/19/20 из этого репозитория **не являются доказательствами дефектов SKILLER Platform**.
 
@@ -108,7 +108,7 @@ npm run test:ui
 - **HTTP acceptance:** PASS — собранное приложение, локальная одноразовая D1, действительные HTTP routes; forged headers/malformed cookie → 401, malformed origin → 403, chunked 12 KB → 413, onboarding/settings/practice/performance/outcome/replay/reload/user isolation/cross-API safety прошли. Включён в `verify` после build и в CI.
 - **Browser acceptance:** NOT RUN. `npx playwright install chromium` завершился `End of central directory record signature not found` / `Failed to download Chrome for Testing`. Chromium отсутствует. Не подменять это зелёными unit/server-тестами.
 - **Production smoke:** только read-only HEAD главной `https://skiller-platform.skiller-app.workers.dev` → 307 guest redirect. Онбординг, API-записи, чужие identity, покупки и запросы к реальной модели на production не выполнялись.
-- **Повторный CI нового PR:** не запускался: автоматическая проверка разрешений отклонила push в публичный репозиторий, поэтому удалённая ветка и PR в этом цикле не созданы. Для публикации сведений об уязвимостях и исправлений в публичном `ivanvasiluk-maker/skiller-platform` требуется отдельное подтверждение владельца. Локальный verify завершился с кодом 0.
+- **Повторный CI нового PR:** запущен в [PR #41](https://github.com/ivanvasiluk-maker/skiller-platform/pull/41); локальный verify завершился с кодом 0. Итог удалённого запуска см. в Checks PR.
 
 Неудачные промежуточные прогоны выявили несовместимый с Node strip-only синтаксис нового helper, недостающий setup/import в regression fixture и потерю module rules в старом acceptance runner. Они исправлены; итоговые статусы относятся к повторному прогону, а не к первой попытке.
 
@@ -124,6 +124,6 @@ npm run test:ui
 
 ## 8. Доставка
 
-Исправления закоммичены в локальной ветке `codex/product-release-audit-20261026`. Code commit: `c3f210cff36c033720d76a178bbceba929a432aa`; финальный повторный verify — exit 0. После проверки кода обновлён только этот документ о доставке; повторный прогон кода не требуется.
+Исправления опубликованы в ветке `codex/product-release-audit-20261026`, [draft PR #41](https://github.com/ivanvasiluk-maker/skiller-platform/pull/41), база — последняя ветка пилота, не main. Опубликованный code commit: `934d4199c33e2b63e385e9174ae324bf67992c70`. Дерево файлов `47d2606f97d2da9aabea2e12061b563322964b9e` побайтово совпало с локальной проверенной версией. После этого изменён только статус доставки в данном документе; код не менялся.
 
-Push отклонён автоматической проверкой разрешений: публичная публикация кода, аудита и конфигурационных материалов в этом конкретном репозитории не была отдельно подтверждена. Обход отказа через другой инструмент не выполнялся. Подготовлены локальный git bundle и описание будущего draft PR; публикация и CI нового PR остаются заблокированными до подтверждения владельца. Production и реальные платежи не изменены.
+Первый push был отклонён автоматической проверкой разрешений из-за публичного репозитория. 26.10.2026 владелец явно разрешил публикацию ветки, аудита и draft PR в публичном `ivanvasiluk-maker/skiller-platform`. Публикация выполнена через подключённый GitHub-доступ, поскольку у CLI отсутствуют учётные данные. Merge, auto-merge, deploy, production-миграции и реальные платежи не выполнялись.
