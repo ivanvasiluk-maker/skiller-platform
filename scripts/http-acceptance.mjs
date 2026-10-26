@@ -3,7 +3,13 @@ import assert from 'node:assert/strict';
 const target = new URL(process.env.SKILLER_UI_TEST_URL);
 if (!['127.0.0.1', 'localhost'].includes(target.hostname)) throw new Error('Local test server required');
 const url = path => new URL(path, target);
-const send = (path, options = {}) => fetch(url(path), { redirect: 'manual', signal: AbortSignal.timeout(15000), ...options });
+const send = async (path, options = {}) => {
+  const response = await fetch(url(path), { redirect: 'manual', signal: AbortSignal.timeout(15000), ...options });
+  // Drain even expected 401/403 responses before reusing an HTTP connection.
+  // The application client also consumes every API response with response.json().
+  const bytes = await response.arrayBuffer();
+  return new Response(bytes, { status: response.status, statusText: response.statusText, headers: response.headers });
+};
 const spoof = await send('/api/trainer', { headers: { 'oai-authenticated-user-id': 'victim', 'oai-authenticated-user-email': 'victim@example.invalid' } });
 assert.equal(spoof.status, 401, 'Public worker must ignore forged user headers');
 const malformed = await send('/api/trainer', { headers: { cookie: '__Host-skiller_guest=%ZZ' } });
