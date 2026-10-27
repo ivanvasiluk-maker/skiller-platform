@@ -48,7 +48,7 @@ export function dayIndex(start: string, now = new Date()) {
 
 // Conservative routing, not a clinical risk assessment. Explicit uncertainty also stops skills.
 export function requiresSafetyRoute(text: string, risk: string = "no") {
-  return risk !== "no" || /суицид|самоубий|покончить с собой|убить себя|убью себя|не хочу жить|самоповреж|порезать себя|причинить (?:себе|кому-то) вред|убью (?:его|её|тебя)|передоз|suicid|kill myself|self.harm|overdose/i.test(text);
+  return risk !== "no" || /хочу умереть|хочется умереть|want to die|end my life|kill myself|забіць сябе|не хачу жыць|суицид|самоубий|покончить с собой|убить себя|убью себя|не хочу жить|самоповреж|порезать себя|причинить (?:себе|кому-то) вред|убью (?:его|её|тебя)|передоз|suicid|kill myself|self.harm|overdose/i.test(text);
 }
 
 export const safetyMessage = "Сейчас важнее живая помощь. Если есть непосредственная опасность, свяжитесь с местной экстренной службой или попросите человека рядом помочь это сделать. По возможности останьтесь рядом с человеком, которому доверяете, и отойдите от того, чем можно причинить вред. SKILLER не является экстренной службой. Автоматическую практику сейчас остановим.";

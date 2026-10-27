@@ -208,6 +208,10 @@ try {
 
   await waitForWorker(baseUrl, () => logs, () => worker.exitCode !== null);
 
+  const releaseSafety = await fetch(`${baseUrl}/release-safety`, { method: "POST" });
+  assert.equal(releaseSafety.status, 200, await releaseSafety.clone().text());
+  assert.deepEqual(await releaseSafety.json(), { riskTextBlocked: true, escalatedStartBlocked: true, crossUserStartBlocked: true, profileFlagBlocked: true, attempts: 0 });
+
   const firstTry = await runScenario(baseUrl, "first_try");
   assert.deepEqual(firstTry, {
     prior: null,

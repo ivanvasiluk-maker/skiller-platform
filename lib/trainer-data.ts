@@ -3,7 +3,7 @@ import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { getRawDb } from "@/db";
 import type { ChatGPTUser } from "@/app/chatgpt-auth";
-import { ensureUser, recommendSkill, startAttempt, completeAttempt, completeOnboarding, loadDashboard, type SkillView } from "@/lib/skiller-data";
+import { clearSafetyHold, ensureUser, recommendSkill, startAttempt, completeAttempt, completeOnboarding, loadDashboard, type SkillView } from "@/lib/skiller-data";
 import { cacheIdempotentResponse, claimIdempotentRequest } from "@/lib/request-idempotency";
 import { buildTrainerContinuity, type TrainerContinuity } from "@/lib/trainer-continuity";
 import { produceFreeTalkReply } from "@/lib/free-talk";
@@ -285,6 +285,7 @@ export async function trainerCommand(user: ChatGPTUser, raw: unknown) {
     if (body.action === "open") await event(profile, body.sessionId, "app_open", body.sessionId);
     if (body.action === "safeAgain") {
       if (body.risk !== "no") throw new Error("Подтвердите отсутствие текущей опасности.");
+      await clearSafetyHold(user.userId);
       await db.prepare("UPDATE trainer_profiles SET safety_flag=0 WHERE user_id=?").bind(user.userId).run();
       await event(profile, body.sessionId, "safety_check_completed", key);
     }

@@ -1,3 +1,5 @@
+import { env } from "cloudflare:workers";
+import { readGuestId } from "@/lib/guest-session";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -18,15 +20,13 @@ const SIGN_IN_PATH = "/signin-with-chatgpt";
 const SIGN_OUT_PATH = "/signout-with-chatgpt";
 const CALLBACK_PATH = "/callback";
 const GUEST_SIGN_IN_PATH = "/api/auth/guest";
-const GUEST_COOKIE_NAME = "__Host-skiller_guest";
-const GUEST_ID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
   const requestHeaders = await headers();
   const userId = requestHeaders.get(USER_ID_HEADER);
   const email = requestHeaders.get(USER_EMAIL_HEADER);
-  if (userId && email) {
+  const trustedHeaders = (env as unknown as { SKILLER_TRUST_AUTH_HEADERS?: string }).SKILLER_TRUST_AUTH_HEADERS === "1";
+  if (trustedHeaders && userId && email) {
     const encodedFullName = requestHeaders.get(USER_FULL_NAME_HEADER);
     const fullName =
       encodedFullName &&
@@ -42,11 +42,8 @@ export async function getChatGPTUser(): Promise<ChatGPTUser | null> {
     };
   }
 
-  const guestId = readCookie(
-    requestHeaders.get("cookie"),
-    GUEST_COOKIE_NAME,
-  );
-  if (!guestId || !GUEST_ID_PATTERN.test(guestId)) return null;
+  const guestId = readGuestId(requestHeaders.get("cookie"));
+  if (!guestId) return null;
 
   return {
     userId: `guest:${guestId}`,
@@ -111,15 +108,6 @@ function isReservedAuthPath(pathname: string): boolean {
     pathname === CALLBACK_PATH ||
     pathname === GUEST_SIGN_IN_PATH
   );
-}
-
-function readCookie(cookieHeader: string | null, name: string): string | null {
-  if (!cookieHeader) return null;
-  for (const part of cookieHeader.split(";")) {
-    const [rawName, ...rawValue] = part.trim().split("=");
-    if (rawName === name) return decodeURIComponent(rawValue.join("="));
-  }
-  return null;
 }
 
 function safeDecodeURIComponent(value: string): string | null {
