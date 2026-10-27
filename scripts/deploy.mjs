@@ -55,7 +55,7 @@ export function assertProductionConfig() {
   return { database: db, config };
 }
 
-const subcommand = process.argv[2] ?? "deploy";
+const subcommand = process.argv[2] ?? "check";
 
 if (subcommand === "check") {
   const { database, config } = assertProductionConfig();
@@ -72,6 +72,9 @@ if (subcommand !== "deploy") {
   throw new Error(`Unknown subcommand '${subcommand}'. Use 'check' or 'deploy'.`);
 }
 
+if (process.env.CI || !process.argv.includes("--confirm-production=skiller-platform")) {
+  throw new Error("Production deploy refused: run manually with --confirm-production=skiller-platform after owner approval; CI is forbidden.");
+}
 const { database } = assertProductionConfig();
 const run = (args, label) => {
   console.log(`\n=== ${label} ===`);
@@ -83,8 +86,7 @@ const run = (args, label) => {
 };
 
 console.log("Deploying to production D1:", database.database_name, database.database_id);
-console.log("Это изменит ПРОДАКШЕН. Прерветесь — Ctrl+C. Пауза 5 секунд...");
-await new Promise((resolve) => setTimeout(resolve, 5000));
+console.log("Explicit production confirmation received.");
 
 run(["node_modules/vinext/dist/cli.js", "build"], "build production bundle");
 run([wranglerPath, "d1", "migrations", "apply", database.database_name, "--remote", "--config", configPath], "apply D1 migrations (remote)");

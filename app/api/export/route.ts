@@ -36,10 +36,10 @@ export async function POST(request: Request) {
     });
     const result = await runSheetsExport(getRawDb(), transport);
     return Response.json(result);
-  } catch (error) {
+  } catch {
     // Сбой экспорта не должен влиять на пользователей — только логируем.
     return Response.json(
-      { error: error instanceof Error ? error.message : "Экспорт не удался" },
+      { error: "Экспорт не удался. Повторите позже." },
       { status: 502 },
     );
   }

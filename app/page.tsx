@@ -25,8 +25,8 @@ export default async function Home() {
 async function loadTrainerState(user: Awaited<ReturnType<typeof requireChatGPTUser>>) {
   try {
     return await trainerState(user);
-  } catch (error) {
-    console.error("SKILLER bootstrap error", error);
+  } catch {
+    console.error("SKILLER bootstrap failed");
     return null;
   }
 }
