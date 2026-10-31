@@ -14,7 +14,7 @@ const spoof = await send('/api/trainer', { headers: { 'oai-authenticated-user-id
 assert.equal(spoof.status, 401, 'Public worker must ignore forged user headers');
 const malformed = await send('/api/trainer', { headers: { cookie: '__Host-skiller_guest=%ZZ' } });
 assert.equal(malformed.status, 401);
-for (const path of ['/api/skiller', '/api/privacy', '/api/group-requests', '/api/day-tasks']) {
+for (const path of ['/api/skiller', '/api/privacy', '/api/group-requests', '/api/day-tasks', '/api/reminders']) {
   assert.equal((await send(path, { method: path === '/api/skiller' ? 'POST' : 'GET', headers: { 'oai-authenticated-user-id': 'victim', 'oai-authenticated-user-email': 'victim@example.invalid' } })).status, 401,
     `${path} must reject forged identity without a session`);
 }
@@ -126,6 +126,26 @@ assert.equal(movedTasks[0].status, 'partial');
 const taskExport = await send('/api/day-tasks?export=1', { headers: { cookie } });
 assert.equal((await taskExport.json()).length, 2);
 
+const reminderTime = new Date(Date.now() + 600000).toISOString().slice(0, 16);
+const reminderBody = { action: 'schedule', taskId: movedTasks[0].id, timezone: 'UTC', localTime: reminderTime, consent: true };
+assert.equal((await post('/api/reminders', { ...reminderBody, consent: false })).status, 400);
+assert.equal((await post('/api/reminders', reminderBody, second)).status, 404);
+assert.equal((await post('/api/reminders', reminderBody, cookie, { origin: 'https://wrong.invalid' })).status, 403);
+assert.equal((await post('/api/reminders', reminderBody)).status, 200);
+assert.equal((await post('/api/reminders', reminderBody)).status, 409);
+const remindersResponse = await send('/api/reminders', { headers: { cookie } });
+assert.equal(remindersResponse.headers.get('cache-control'), 'no-store');
+const reminder = (await remindersResponse.json()).items[0];
+assert.ok(reminder && !reminder.due);
+assert.deepEqual((await (await send('/api/reminders', { headers: { cookie: second } })).json()).items, []);
+assert.equal((await post('/api/reminders', { action: 'cancel', id: reminder.id, version: reminder.version }, second)).status, 409);
+assert.equal((await post('/api/reminders', { action: 'snooze', id: reminder.id, version: reminder.version })).status, 200);
+assert.equal((await post('/api/reminders', { action: 'cancel', id: reminder.id, version: reminder.version })).status, 409);
+const reminderExport = await send('/api/reminders?export=1', { headers: { cookie } });
+assert.equal((await reminderExport.json()).reminders.length, 1);
+assert.equal((await post('/api/reminders', { action: 'disableAll' })).status, 200);
+assert.deepEqual((await (await send('/api/reminders', { headers: { cookie } })).json()).items, []);
+
 const privateCookie = cookie;
 const privacy = await post('/api/privacy', { confirmation: 'УДАЛИТЬ' });
 assert.equal(privacy.status, 202);
@@ -135,6 +155,7 @@ const otherPrivacy = await (await send('/api/privacy', { headers: { cookie: seco
 assert.equal(otherPrivacy.request, null, 'Erasure status is scoped to the authenticated account');
 assert.equal((await post('/api/trainer', { requestId: crypto.randomUUID(), sessionId, action: 'open' }, privateCookie)).status, 409);
 assert.equal((await post('/api/day-tasks', taskBody)).status, 409, 'Erasure request freezes task writes');
+assert.equal((await post('/api/reminders', reminderBody)).status, 409);
 const blockedPurge = await send('/api/privacy/admin', { method: 'POST', headers: { authorization: 'Bearer local-synthetic-privacy-owner', 'content-type': 'application/json' }, body: JSON.stringify({ id: receipt.request.id, confirmation: 'PURGE_VERIFIED', mirrorsVerified: true }) });
 assert.equal(blockedPurge.status, 409, 'Purge is forbidden outside maintenance');
 assert.equal((await send('/api/trainer', { headers: { cookie: second } })).status, 200, 'Other account remains usable');

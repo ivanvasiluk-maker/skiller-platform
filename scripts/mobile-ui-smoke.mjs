@@ -100,6 +100,24 @@ try {
     const otherTask = dayPlan.getByRole('article', { name: `Дело: Письмо ${width}`, exact: true });
     await page.screenshot({ path: `test-results/mobile-ui/day-tasks-${width}.png`, fullPage: true });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'Day plan must fit mobile');
+    await dayPlan.getByLabel('Часовой пояс дел').fill('UTC');
+    await otherTask.getByRole('button', { name: 'Напомнить об этом деле', exact: true }).click();
+    const futureTime = new Date(Date.now() + 86400000).toISOString().slice(0, 16);
+    await otherTask.getByLabel('Когда проверить дело').fill(futureTime);
+    assert.equal(await otherTask.getByRole('button', { name: 'Подтвердить напоминание', exact: true }).isDisabled(), true);
+    await otherTask.getByText('При закрытом приложении уведомление не придёт.', { exact: false }).waitFor();
+    await otherTask.getByRole('checkbox', { name: 'Разрешаю это разовое напоминание в приложении', exact: true }).check();
+    await otherTask.getByRole('button', { name: 'Подтвердить напоминание', exact: true }).click();
+    const reminderInbox = page.getByRole('region', { name: 'Мои напоминания', exact: true });
+    await reminderInbox.getByRole('article', { name: `Напоминание: Письмо ${width}`, exact: true }).waitFor();
+    assert.equal(await reminderInbox.getByRole('article').count(), 1);
+    await reminderInbox.getByRole('button', { name: 'Напомнить через час', exact: true }).click();
+    await reminderInbox.getByRole('button', { name: 'Напомнить через час', exact: true }).waitFor({ state: 'visible' });
+    await page.screenshot({ path: `test-results/mobile-ui/reminders-${width}.png`, fullPage: true });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'Reminder inbox must fit mobile');
+    await reminderInbox.getByRole('button', { name: 'Отменить напоминание', exact: true }).click();
+    await reminderInbox.waitFor({ state: 'hidden' });
+
     await otherTask.getByRole('button', { name: 'Помоги начать', exact: true }).click();
     await input.waitFor();
     assert.match(await input.inputValue(), new RegExp(`Хочу начать дело: Письмо ${width}`));

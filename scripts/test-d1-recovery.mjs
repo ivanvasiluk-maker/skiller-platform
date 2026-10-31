@@ -49,6 +49,7 @@ try {
   run(source, ['migrations', 'apply', TEST_DATABASE_NAME]);
   query(source, "INSERT INTO users (id,email,display_name) VALUES ('restore-a','a@example.invalid','A'),('restore-b','b@example.invalid','B')");
   query(source, "INSERT INTO behavioral_memory_v2 (id,user_id,analysis_id,kind,action_urge,topic,intervention_point,created_at) VALUES ('restore-memory','restore-b','restore-analysis','task','avoid','synthetic','start','2026-10-31')");
+  query(source, "INSERT INTO day_tasks (id,user_id,task_date,timezone,title,title_key,status,created_at,updated_at) VALUES ('restore-task','restore-b','2026-11-01','UTC','Synthetic restore task','synthetic restore task','partial','2026-10-31','2026-10-31'); INSERT INTO reminder_preferences (user_id,enabled,updated_at) VALUES ('restore-b',1,'2026-10-31'); INSERT INTO reminders (id,user_id,task_id,timezone,local_time,due_at,created_at,updated_at) VALUES ('restore-reminder','restore-b','restore-task','UTC','2026-11-01T12:00','2026-11-01T12:00:00.000Z','2026-10-31','2026-10-31')");
   query(source, "INSERT INTO privacy_requests (id,user_id,status,created_at) VALUES ('restore-erasure','restore-a','requested','2026-10-31')");
   const before = inventory(source);
   run(source, ['export', TEST_DATABASE_NAME, '--output', snapshot]);
