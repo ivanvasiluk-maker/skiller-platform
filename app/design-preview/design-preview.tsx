@@ -71,7 +71,7 @@ const coaches = {
     phrase: "Отделим факт от мысли и проверим одну гипотезу.",
   },
   skinny: {
-    name: "Скинни",
+    name: "Скиннер",
     role: "Импульс к действию",
     color: "#b75735",
     soft: "#fae7da",
@@ -141,7 +141,7 @@ function CoachChoice({ coachId, setCoachId, next }: { coachId: CoachId; setCoach
     <div className="dp-coach-list">{(Object.keys(coaches) as CoachId[]).map(id => { const coach = coaches[id]; return <button key={id} onClick={() => setCoachId(id)} className={`dp-coach-card ${coachId === id ? "selected" : ""}`} style={{ "--coach": coach.color, "--soft": coach.soft } as React.CSSProperties}>
       <Character coachId={id} mood={coachId === id ? "happy" : "calm"}/><span className="dp-coach-copy"><small>{coach.role}</small><strong>{coach.name}</strong><span>{coach.phrase}</span></span>{coachId === id && <span className="dp-check"><Check size={15}/></span>}
     </button>; })}</div>
-    <div className="dp-sticky-action"><button className="dp-primary" onClick={next}>Продолжить с {coaches[coachId].name === "Марша" ? "Маршей" : coaches[coachId].name === "Бек" ? "Беком" : "Скинни"} <ArrowRight size={18}/></button></div>
+    <div className="dp-sticky-action"><button className="dp-primary" onClick={next}>Продолжить {coaches[coachId].name === "Марша" ? "с Маршей" : coaches[coachId].name === "Бек" ? "с Беком" : "со Скиннером"} <ArrowRight size={18}/></button></div>
   </div>;
 }
 
