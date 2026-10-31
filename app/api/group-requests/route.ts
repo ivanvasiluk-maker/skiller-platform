@@ -18,7 +18,9 @@ export async function GET() {
 export async function POST(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "Требуется вход" }, { status: 401 });
-  if (!enabled()) return Response.json({ error: "Заявки пока закрыты" }, { status: 503 });
-  try { return Response.json(await createGroupRequest(getRawDb(), user.userId, await (await boundedRequest(request, 2000)).json()), { status: 202, headers: { "Cache-Control": "no-store" } }); }
+  try {
+    const bounded = await boundedRequest(request, 2000);
+    if (!enabled()) return Response.json({ error: "Заявки пока закрыты" }, { status: 503 });
+    return Response.json(await createGroupRequest(getRawDb(), user.userId, await bounded.json()), { status: 202, headers: { "Cache-Control": "no-store" } }); }
   catch (error) { return boundaryResponse(error); }
 }

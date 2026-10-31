@@ -49,8 +49,14 @@ jobs:
       - name: Run D1 recommendation integration tests
         run: npm run test:integration
 
+      - name: Rehearse isolated D1 backup restoration
+        run: npm run test:recovery
+
       - name: Build production bundle
         run: npm run build
 
       - name: Run isolated application HTTP acceptance
         run: npm run test:http
+
+      - name: Verify maintenance write barriers
+        run: npm run test:maintenance

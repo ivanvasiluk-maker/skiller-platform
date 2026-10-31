@@ -2,6 +2,12 @@
 
 Обновлено: 17.10.2026. Это основной список коротких спринтов. Прототип и production — разные продукты публикации. Завершённый макет не означает реализованную серверную функцию.
 
+## S02 Security and recovery candidate 31.10.2026
+
+Built on S01 (PR 43). Complete local verify passed with recovery and maintenance checks: real local D1 snapshot/restore comparison, cross-account HTTP/admin boundaries and maintenance write barriers. Fixed refused group/export requests leaving unread bodies. See [S02 evidence and remaining production gates](S02_SECURITY_RECOVERY_2026_10_31.md).
+
+No production backup was downloaded or restored. Actual production binding, external auto-deploy configuration and post-snapshot deletion reconciliation remain release gates. No deploy or merge was performed.
+
 ## S01 Integration candidate 31.10.2026
 
 Current integration: latest readiness code plus PR 38 behavior and the published character assets, styles and navigation. Additive migration 0020 reconciles retained memory namespaces; erasure includes both. See [S01 integration and upgrade procedure](S01_INTEGRATION_2026_10_31.md).

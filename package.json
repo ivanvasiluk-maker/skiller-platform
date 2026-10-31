@@ -21,12 +21,14 @@
     "test:d1:reset": "node scripts/d1-test-admin.mjs reset",
     "pilot:metrics": "node scripts/pilot-metrics.mjs",
     "pilot:reconcile": "node scripts/pilot-metrics.mjs --reconcile",
-    "verify": "npm run lint && npm run typecheck && npm run test:core && npm run test:d1 && npm run test:integration && npm run build && npm run test:http",
+    "verify": "npm run lint && npm run typecheck && npm run test:core && npm run test:d1 && npm run test:integration && npm run test:recovery && npm run build && npm run test:http && npm run test:maintenance",
     "deploy:check": "node scripts/deploy.mjs check",
     "deploy": "node scripts/deploy.mjs deploy",
     "db:generate": "drizzle-kit generate",
     "test:ui": "node scripts/test-ui.mjs",
-    "test:http": "node scripts/test-ui.mjs --http"
+    "test:http": "node scripts/test-ui.mjs --http",
+    "test:recovery": "node scripts/test-d1-recovery.mjs",
+    "test:maintenance": "node scripts/test-ui.mjs --maintenance"
   },
   "dependencies": {
     "@base-ui/react": "1.7.0",

@@ -14,6 +14,10 @@ const spoof = await send('/api/trainer', { headers: { 'oai-authenticated-user-id
 assert.equal(spoof.status, 401, 'Public worker must ignore forged user headers');
 const malformed = await send('/api/trainer', { headers: { cookie: '__Host-skiller_guest=%ZZ' } });
 assert.equal(malformed.status, 401);
+for (const path of ['/api/skiller', '/api/privacy', '/api/group-requests']) {
+  assert.equal((await send(path, { method: path === '/api/skiller' ? 'POST' : 'GET', headers: { 'oai-authenticated-user-id': 'victim', 'oai-authenticated-user-email': 'victim@example.invalid' } })).status, 401,
+    `${path} must reject forged identity without a session`);
+}
 async function guest() {
   const response = await send('/api/auth/guest');
   assert.equal(response.status, 303);
@@ -58,6 +62,11 @@ assert.equal(restored.plans.find(item => item.id === plan.id).helpfulness, 7);
 const isolated = await (await send('/api/trainer', { headers: { cookie: second } })).json();
 assert.equal(isolated.profile, null);
 assert.equal(isolated.plans.length, 0);
+await command({ action: 'onboard', name: 'Other account', trainerId: 'beck', text: 'Another synthetic task', consent: true }, second);
+const crossAccount = await post('/api/trainer', { action: 'start', requestId: crypto.randomUUID(), sessionId, planId: plan.id }, second);
+assert.equal(crossAccount.status, 400, 'A second onboarded account cannot operate on another account plan');
+const unchanged = await (await send('/api/trainer', { headers: { cookie } })).json();
+assert.equal(unchanged.plans.find(item => item.id === plan.id).result, 'done', 'Rejected cross-account write must preserve the original outcome');
 const groupResponse = await post('/api/group-requests', { contact: '@synthetic_http', consent: true });
 assert.equal(groupResponse.status, 202);
 const group = await groupResponse.json();
@@ -65,6 +74,17 @@ const duplicateLead = await (await post('/api/group-requests', { contact: '@synt
 assert.equal(group.id, duplicateLead.id);
 assert.equal((await send('/api/group-requests/admin')).status, 403);
 assert.equal((await send('/api/privacy/admin')).status, 403);
+// Administrative credentials are separate from each other and from user cookies.
+for (const [path, wrongKey] of [
+  ['/api/privacy/admin', 'local-synthetic-owner'],
+  ['/api/group-requests/admin', 'local-synthetic-privacy-owner'],
+]) {
+  assert.equal((await send(path, { headers: { cookie, authorization: `Bearer ${wrongKey}` } })).status, 403);
+}
+const myGroup = await (await send('/api/group-requests', { headers: { cookie } })).json();
+const otherGroup = await (await send('/api/group-requests', { headers: { cookie: second } })).json();
+assert.ok(JSON.stringify(myGroup).includes(group.id));
+assert.ok(!JSON.stringify(otherGroup).includes(group.id), 'Another user cannot see a group request');
 const unverifiedPayment = await send('/api/group-requests/admin', { method: 'PATCH', headers: { authorization: 'Bearer local-synthetic-owner', 'content-type': 'application/json' }, body: JSON.stringify({ id: group.id, status: 'confirmed' }) });
 assert.equal(unverifiedPayment.status, 400);
 await command({ action: 'message', text: 'Я хочу убить себя' });
@@ -88,6 +108,8 @@ const privacy = await post('/api/privacy', { confirmation: 'УДАЛИТЬ' });
 assert.equal(privacy.status, 202);
 const receipt = await privacy.json();
 assert.equal(receipt.request.status, 'requested');
+const otherPrivacy = await (await send('/api/privacy', { headers: { cookie: second } })).json();
+assert.equal(otherPrivacy.request, null, 'Erasure status is scoped to the authenticated account');
 assert.equal((await post('/api/trainer', { requestId: crypto.randomUUID(), sessionId, action: 'open' }, privateCookie)).status, 409);
 const blockedPurge = await send('/api/privacy/admin', { method: 'POST', headers: { authorization: 'Bearer local-synthetic-privacy-owner', 'content-type': 'application/json' }, body: JSON.stringify({ id: receipt.request.id, confirmation: 'PURGE_VERIFIED', mirrorsVerified: true }) });
 assert.equal(blockedPurge.status, 409, 'Purge is forbidden outside maintenance');
