@@ -14,6 +14,16 @@ Group-request refusals and export refusals now consume a bounded request body be
 - Recovery and maintenance checks are included in `verify` and GitHub CI. Existing S01 deletion tests still verify fail-closed behavior for unknown owned tables, rollback on FK failure, both memory namespaces and preservation of another account.
 - Existing deploy-boundary tests reject deployment without the explicit confirmation flag and reject deployment from CI even with that flag. The Verify workflow has no deployment job.
 
+## Dependency hardening
+
+The registry audit initially reported eight affected packages in the runtime dependency graph, including one critical finding. This is a dependency-graph finding, not proof that the deployed application's routes are exploitable. Next.js is pinned to 16.4.3 and Zod to 4.6.7; compatible transitive fixes are recorded in the lockfile. The coordinated build-tool update pins React/React DOM/RSC to 19.3.1, Vinext to 1.4.0, Vite to 8.3.5, the Cloudflare plugin to 1.66.0 and Wrangler to 4.156.0, with compatible worker types and RSC plugin.
+
+Audit runtime and build dependencies separately: packages declared as dev dependencies can still contribute to the production bundle. Record unresolved advisories as release-review items rather than forcing incompatible major overrides or downgrades. Registry audit success only describes advisories known at the time of the check.
+
+Sources: [Next.js maintainer advisory](https://github.com/vercel/next.js/security/advisories/GHSA-2464-fhr4-w9xw), [Zod migration guide](https://zod.dev/v4/changelog), npm registry audit and peer-dependency metadata checked 31.10.2026.
+
+Final registry scan of this lockfile: no critical or high findings across the complete dependency graph; the runtime-only audit reports zero findings. The complete scan still reports 24 moderate graph entries, rooted in the minimatch, legacy esbuild and fflate advisories; these counts include affected parent chains, not 24 independent vulnerabilities. Their documented conditions concern glob amplification, the old development server and malformed ZIP64 input. Do not expose development servers or feed untrusted archives/configuration into these tools. This does not establish that every build dependency is irrelevant to runtime; remaining advisories require separate review. Suggested automatic downgrades of ESLint, Drizzle Kit and Vinext were not applied. `audit:runtime` now gates CI at high severity; a zero runtime audit is not a claim that the complete audit is clean.
+
 ## Release gates still requiring production evidence
 
 | Gate | Current evidence | Remaining before release |
