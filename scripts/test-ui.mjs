@@ -11,6 +11,7 @@ import { assertTestD1, TEST_DATABASE_ID, TEST_DATABASE_NAME } from './d1-test-gu
 
 // Fail before starting a worker or touching D1 if the browser is unavailable.
 const maintenance = process.argv.includes('--maintenance');
+const pilot = process.argv.includes('--pilot');
 const httpOnly = process.argv.includes('--http') || maintenance;
 if (!httpOnly) {
   const { launchBrowser } = await import('./browser-launch.mjs');
@@ -75,7 +76,7 @@ try {
     await new Promise(resolve => setTimeout(resolve, 250));
   }
   if (!ready) throw new Error('Local UI worker did not become ready within 60 seconds');
-  execFileSync(process.execPath, [maintenance ? 'scripts/maintenance-acceptance.mjs' : httpOnly ? 'scripts/http-acceptance.mjs' : 'scripts/mobile-ui-smoke.mjs'], {
+  execFileSync(process.execPath, [maintenance ? 'scripts/maintenance-acceptance.mjs' : pilot ? 'scripts/pilot-ui-acceptance.mjs' : httpOnly ? 'scripts/http-acceptance.mjs' : 'scripts/mobile-ui-smoke.mjs'], {
     cwd: projectRoot, env: { ...environment, SKILLER_UI_TEST_URL: url }, stdio: 'inherit',
   });
   if (maintenance) {
