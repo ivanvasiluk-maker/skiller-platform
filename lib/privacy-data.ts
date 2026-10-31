@@ -36,6 +36,7 @@ export const ERASURE_TABLES = [
   "onboarding_profiles", "psychologist_access", "trainer_performance_details", "trainer_plan_pauses",
   "trainer_outcome_reports", "trainer_messages", "trainer_plans", "trainer_requests",
   "trainer_communication_preferences", "conversation_followups", "success_factors", "intervention_memory",
+  "intervention_memory_v2", "behavioral_memory_v2",
   "conversation_analysis_sessions", "behavioral_memory", "open_loops", "safety_holds", "group_requests",
   "export_queue", "pilot_feedback", "pilot_events", "cohort_members", "trainer_profiles",
 ] as const;

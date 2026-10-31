@@ -588,7 +588,7 @@ async function runOnboardingFlow(db: D1Database) {
     eventNames: events.results.map((row) => row.event_name),
     allVersioned: events.results.every((row) => {
       const payload = JSON.parse(row.payload_json);
-      return payload.product_version === "frozen-mvp-1.0" && payload.character_version === "1.1";
+      return payload.product_version === "frozen-mvp-1.0" && payload.character_version === "1.2";
     }),
     cohortKey: cohort?.cohort_key ?? null,
   };
@@ -1795,6 +1795,13 @@ async function runReleaseReadiness(db: D1Database) {
   const command = (raw: Record<string, unknown>, who = user) => trainerCommand(who, { requestId: crypto.randomUUID(), sessionId, ...raw });
   await command({ action: "onboard", name: "Target", trainerId: "marsha", text: "Откладываю отчёт и читаю новости", consent: true });
   const otherBefore = await command({ action: "onboard", name: "Keep", trainerId: "beck", text: "Эту запись нельзя удалять", consent: true }, other);
+  // Upgrade-retained memory namespaces must be included in account erasure.
+  for (const who of [user.userId, other.userId]) {
+    await db.prepare("INSERT INTO behavioral_memory_v2 (id,user_id,analysis_id,kind,action_urge,topic,intervention_point,created_at) VALUES (?,?,?,'task','avoid','synthetic','start',?)")
+      .bind(crypto.randomUUID(), who, crypto.randomUUID(), new Date().toISOString()).run();
+    await db.prepare("INSERT INTO intervention_memory_v2 (id,user_id,skill_id,outcome,created_at) VALUES (?,?,'micro-start','done',?)")
+      .bind(crypto.randomUUID(), who, new Date().toISOString()).run();
+  }
   if (await groupEligibility(db, user.userId)) throw new Error("Offer before completed practice");
   const planState = await command({ action: "quickStop", text: "Волнуюсь из-за рабочего отчёта", intensity: 6, risk: "no" });
   const plan = planState.plans[0];
@@ -1854,6 +1861,10 @@ async function runReleaseReadiness(db: D1Database) {
   if (await privacyStatus(db, user.userId)) throw new Error("Request retains old identity");
   const buckets = await userUsageBuckets(user.userId);
   for (const bucket of buckets) if (await db.prepare("SELECT bucket FROM usage_limits WHERE bucket=?").bind(bucket).first()) throw new Error("User quota identifier remains after erasure");
+  for (const table of ["behavioral_memory_v2", "intervention_memory_v2"]) {
+    const retained = await db.prepare(`SELECT count(*) AS n FROM ${table} WHERE user_id=?`).bind(other.userId).first<{ n: number }>();
+    if (retained?.n !== 1) throw new Error("Upgrade memory of another user changed");
+  }
   const otherAfter = await trainerState(other);
   if (JSON.stringify(otherBefore.messages) !== JSON.stringify(otherAfter.messages) || otherAfter.profile?.name !== "Keep") throw new Error("Another account changed");
   await purgeAccount(db, request.id, { maintenance: true, mirrorsVerified: true });

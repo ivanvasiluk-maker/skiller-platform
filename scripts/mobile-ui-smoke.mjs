@@ -24,6 +24,10 @@ try {
     await page.getByRole('button', { name: 'Разобрать мою ситуацию', exact: true }).click();
     await page.getByLabel('Как к Вам обращаться?').fill('Тест');
     await page.getByRole('button', { name: 'Познакомиться с тренерами' }).click();
+    const portraits = page.locator('.trainer-intro-portrait img');
+    assert.equal(await portraits.count(), 3);
+    await portraits.evaluateAll(images => Promise.all(images.map(image => image.decode())));
+    await page.screenshot({ path: `test-results/mobile-ui/trainers-${width}.png`, fullPage: true });
     const trainerName = width === 360 ? 'Марша' : width === 390 ? 'Бек' : 'Скинни';
     await page.getByRole('radio').filter({ hasText: trainerName }).click();
     await page.getByRole('button', { name: width === 360 ? 'Продолжить с Маршей' : width === 390 ? 'Продолжить с Беком' : 'Продолжить с Скинни' }).click();

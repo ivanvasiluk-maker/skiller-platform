@@ -2,6 +2,12 @@
 
 Обновлено: 17.10.2026. Это основной список коротких спринтов. Прототип и production — разные продукты публикации. Завершённый макет не означает реализованную серверную функцию.
 
+## S01 Integration candidate 31.10.2026
+
+Current integration: latest readiness code plus PR 38 behavior and the published character assets, styles and navigation. Additive migration 0020 reconciles retained memory namespaces; erasure includes both. See [S01 integration and upgrade procedure](S01_INTEGRATION_2026_10_31.md).
+
+The candidate is prepared for review, not deployed. S02 and live AI/real-device/production backup acceptance remain open. Historical rounds below describe their original versions and do not override this integration status.
+
 ## Текущий раунд — N0, воспроизводимый UI-прогон, 17.10.2026
 
 - Проверен HEAD `88a4c11`: содержит `main` (`14a111f`), опережает его на 47 коммитов. PR #39 направлен в промежуточную `feat/conversation-relationship-layer`; путь объединения до main остаётся отдельной задачей.
