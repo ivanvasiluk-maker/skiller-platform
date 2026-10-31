@@ -535,6 +535,9 @@ try {
     },
   });
 
+  const reminders = await runEndpoint(baseUrl, "reminder-cycle");
+  for (const [key, value] of Object.entries(reminders)) assert.equal(value, true, `Reminders: ${key}`);
+
   const dayTasks = await runEndpoint(baseUrl, "day-task-cycle");
   for (const [key, value] of Object.entries(dayTasks)) assert.equal(value, true, `Day tasks: ${key}`);
 

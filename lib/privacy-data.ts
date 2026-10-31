@@ -32,7 +32,7 @@ export async function requestErasure(db: D1Database, userId: string) {
 
 // Children precede their FK parents. Analytics use the profile pseudonym.
 export const ERASURE_TABLES = [
-  "day_tasks", "delayed_outcomes", "outcomes", "personal_skill_evidence", "skill_attempts", "situations",
+  "reminders", "reminder_preferences", "day_tasks", "delayed_outcomes", "outcomes", "personal_skill_evidence", "skill_attempts", "situations",
   "onboarding_profiles", "psychologist_access", "trainer_performance_details", "trainer_plan_pauses",
   "trainer_outcome_reports", "trainer_messages", "trainer_plans", "trainer_requests",
   "trainer_communication_preferences", "conversation_followups", "success_factors", "intervention_memory",

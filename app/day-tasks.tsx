@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DayTask } from "@/lib/day-tasks";
 import "./day-tasks.css";
+import { ReminderSchedule, remindersChanged } from "./reminders";
 
 export function DayTasks({ onHelp }: { onHelp: (title: string) => void }) {
   const [date, setDate] = useState("");
@@ -35,6 +36,11 @@ export function DayTasks({ onHelp }: { onHelp: (title: string) => void }) {
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [date, refresh]);
+  useEffect(() => {
+    const update = () => setRefresh(value => value + 1);
+    window.addEventListener("skiller-reminders-changed", update);
+    return () => window.removeEventListener("skiller-reminders-changed", update);
+  }, []);
   async function mutate(body: Record<string, unknown>) {
     if (inflight.current) return false;
     inflight.current = true; setBusy(true); setError(""); setNotice("");
@@ -43,7 +49,7 @@ export function DayTasks({ onHelp }: { onHelp: (title: string) => void }) {
       const result = await response.json() as { error?: string; added: number; submitted: number };
       if (!response.ok) throw new Error(result.error || "Не удалось сохранить дело.");
       setNotice(body.action === "add" ? `Добавлено: ${result.added}. Пропущено повторов или дел сверх лимита 100 на дату: ${result.submitted - result.added}.` : "Изменения сохранены.");
-      setLoading(true); setRefresh(value => value + 1);
+      setLoading(true); setRefresh(value => value + 1); remindersChanged();
       return true;
     } catch (error) {
       setError(error instanceof Error ? error.message : "Не удалось сохранить. Обновите список перед повтором.");
@@ -63,7 +69,7 @@ export function DayTasks({ onHelp }: { onHelp: (title: string) => void }) {
     {loading ? <p>Открываем дела…</p> : !error && !tasks.length && <p>На эту дату пока нет дел.</p>}
     {!loading && <div className="day-task-list">{tasks.map(task => <TaskRow key={`${task.id}:${task.version}`} task={task} timezone={timezone} disabled={busy} mutate={mutate} onHelp={onHelp}/>)}</div>}
     <a className="trainer-link" href="/api/day-tasks?export=1" download="skiller-day-tasks.json">Скачать все мои дела (JSON)</a>
-    <small>Напоминания о делах пока не отправляются.</small>
+    <small>Напоминания доступны только внутри открытого приложения.</small>
   </section>;
 }
 function TaskRow({ task, timezone, disabled, mutate, onHelp }: { task: DayTask; timezone: string; disabled: boolean; mutate: (body: Record<string, unknown>) => Promise<boolean>; onHelp: (title: string) => void }) {
@@ -79,6 +85,7 @@ function TaskRow({ task, timezone, disabled, mutate, onHelp }: { task: DayTask; 
       {task.status !== "done" && <><button className="trainer-secondary" disabled={disabled || Boolean(task.is_focus)} onClick={() => void mutate({ action: "focus", id: task.id, version: task.version })}>{task.is_focus ? "Выбрано для старта" : "Выбрать для старта"}</button><button className="trainer-secondary" disabled={disabled || task.status === "partial"} onClick={() => void update({ status: "partial" })}>Начал, но не закончил</button><button className="trainer-secondary" disabled={disabled} onClick={() => onHelp(task.title)}>Помоги начать</button></>}
       <button className="trainer-link" disabled={disabled} onClick={() => setEditing(!editing)}>Изменить или перенести</button>
     </div>
+    {task.status !== "done" && <ReminderSchedule taskId={task.id} timezone={timezone}/>}
     {editing && <form onSubmit={async event => { event.preventDefault(); if (await update({ title, date })) setEditing(false); }}>
       <label>Название дела<input aria-label="Новое название дела" value={title} maxLength={240} onChange={event => setTitle(event.target.value)}/></label>
       <label>Перенести на дату<input aria-label="Перенести на дату" type="date" value={date} onChange={event => setDate(event.target.value)}/></label>

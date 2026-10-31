@@ -2,6 +2,7 @@
 import { systemPrompt, type CommunicationPreferences } from "@/lib/communication-preferences";
 import { displaySkillSteps } from "@/lib/skill-instruction-copy";
 import Link from "next/link";
+import { ReminderCenter } from "./reminders";
 import { DayTasks } from "./day-tasks";
 import { TrainerCharacter } from "./trainer-character";
 import "./trainer-design.css";
@@ -369,6 +370,7 @@ export function TrainerApp({ initialState }: { initialState: TrainerState }) {
     <header className="trainer-header"><Link className="trainer-logo" href="/">skiller<span>●</span></Link><span className="trainer-header-note">маленькие действия · реальные изменения</span>{profile && <button className="trainer-icon-button" aria-label="Настройки тренера" onClick={() => setSettings(!settings)}><Settings2 size={21}/></button>}</header>
     {error && <div className="trainer-error" role="alert">{error}<button onClick={refresh}>Обновить данные</button></div>}
     {notice && <div className="trainer-notice" role="status">{notice}<button aria-label="Закрыть уведомление" onClick={() => setNotice("")}><X size={16}/></button></div>}
+    {profile && <ReminderCenter onHelp={title => { setText(previous => previous.trim() ? `${previous}\nВозвращаюсь к делу: ${title}` : `Возвращаюсь к делу: ${title}`); enter("talk"); }}/>}
     {!profile ? <main className="trainer-onboarding">
       {step === -1 && <PracticeDirection onStart={() => setStep(0)} />}
       {step >= 0 && <span className="trainer-kicker">ЗНАКОМСТВО / {step + 1} ИЗ 3</span>}

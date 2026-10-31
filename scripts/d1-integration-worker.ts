@@ -1,3 +1,4 @@
+import { listReminders, reminderCommand, exportReminders } from "../lib/reminders";
 import { listDayTasks, exportDayTasks, dayTaskCommand } from "../lib/day-tasks";
 import { consumeUsage, userUsageBuckets } from "../lib/usage-limits";
 import { ERASURE_TABLES, privacyStatus, requestErasure, purgeAccount } from "../lib/privacy-data";
@@ -1651,6 +1652,7 @@ const worker: ExportedHandler<Env> = {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
       return Response.json(row);
     }
+    if (request.method === "POST" && url.pathname === "/reminder-cycle") { try { return Response.json(await runReminderCycle(env.DB)); } catch (error) { return Response.json({ error: String(error), stack: error instanceof Error ? error.stack : "" }, { status: 500 }); } }
     if (request.method === "POST" && url.pathname === "/day-task-cycle") { try { return Response.json(await runDayTaskCycle(env.DB)); } catch (error) { return Response.json({ error: String(error), stack: error instanceof Error ? error.stack : "" }, { status: 500 }); } }
     if (request.method === "POST" && url.pathname === "/release-readiness") { try { return Response.json(await runReleaseReadiness(env.DB)); } catch (error) { return Response.json({ error: String(error), stack: error instanceof Error ? error.stack : "" }, { status: 500 }); } }
     if (request.method === "POST" && url.pathname === "/release-safety") return Response.json(await runReleaseSafety(env.DB));
@@ -1923,5 +1925,59 @@ async function runDayTaskCycle(db: D1Database) {
     exportOwned: beforePurge.length === 3 && !(await exportDayTasks(db, other)).some(task => beforePurge.some(own => own.id === task.id)),
     deletionBlocked, maintenanceBlocked,
     erasure: (await exportDayTasks(db, user)).length === 0 && (await exportDayTasks(db, other)).length === 1,
+  };
+}
+
+
+async function runReminderCycle(db: D1Database) {
+  const user = `reminder-${crypto.randomUUID()}`, other = `reminder-other-${crypto.randomUUID()}`;
+  const now = Date.parse("2026-11-01T08:00:00Z");
+  const command = (body: Record<string, unknown>, id = user, at = now) => reminderCommand(db, id, body, false, at);
+  await dayTaskCommand(db, user, { action: "add", date: "2026-11-01", timezone: "UTC", text: "Первое дело" });
+  await dayTaskCommand(db, other, { action: "add", date: "2026-11-01", timezone: "UTC", text: "Чужое дело" });
+  let task = (await listDayTasks(db, user, "2026-11-01"))[0];
+  const foreign = (await listDayTasks(db, other, "2026-11-01"))[0];
+  const schedule = { action: "schedule", taskId: task.id, timezone: "UTC", localTime: "2026-11-01T09:00", consent: true };
+  let consent = false, duplicate = false, isolation = false, stale = false, blocked = false;
+  try { await command({ ...schedule, consent: false }); } catch { consent = true; }
+  try { await command({ ...schedule, taskId: foreign.id }); } catch { isolation = true; }
+  await command(schedule);
+  try { await command(schedule); } catch { duplicate = true; }
+  const before = await listReminders(db, user, now);
+  const due = await listReminders(db, user, now + 7200000);
+  const first = due.items[0];
+  await command({ action: "snooze", id: first.id, version: first.version }, user, now + 7200000);
+  const snoozed = await listReminders(db, user, now + 7200000);
+  try { await command({ action: "cancel", id: first.id, version: first.version }); } catch { stale = true; }
+  await dayTaskCommand(db, user, { action: "update", id: task.id, version: task.version, date: task.task_date, timezone: task.timezone, title: task.title, status: "done" });
+  const completedSuppressed = (await listReminders(db, user, now + 86400000)).items.length === 0;
+  task = (await listDayTasks(db, user, "2026-11-01"))[0];
+  await dayTaskCommand(db, user, { action: "update", id: task.id, version: task.version, date: task.task_date, timezone: task.timezone, title: task.title, status: "todo" });
+  const noResurrection = (await listReminders(db, user, now + 86400000)).items.length === 0;
+  await command(schedule);
+  await command({ action: "disableAll" });
+  const disabled = await listReminders(db, user, now + 86400000);
+  const history = await exportReminders(db, user);
+  await command({ ...schedule, taskId: foreign.id }, other);
+  await command(schedule); // Explicit consent can enable a new one-off reminder after opting out.
+  try { await reminderCommand(db, user, { action: "disableAll" }, true, now); } catch { blocked = true; }
+  task = (await listDayTasks(db, user, "2026-11-01"))[0];
+  await dayTaskCommand(db, user, { action: "update", id: task.id, version: task.version, date: "2026-11-02", timezone: task.timezone, title: task.title, status: "partial" });
+  const moveCancels = (await listReminders(db, user, now + 86400000)).items.length === 0;
+  await command(schedule);
+  const request = await requestErasure(db, user);
+  const privacySuppresses = (await listReminders(db, user, now + 86400000)).items.length === 0;
+  let privacyBlocks = false;
+  try { await command({ action: "disableAll" }); } catch { privacyBlocks = true; }
+  await db.prepare("UPDATE privacy_requests SET created_at=? WHERE id=?").bind("2026-01-01T00:00:00Z", request!.id).run();
+  await purgeAccount(db, request!.id, { maintenance: true, mirrorsVerified: true });
+  const erased = await exportReminders(db, user);
+  return {
+    consent, duplicate, isolation, stale, blocked, privacySuppresses, privacyBlocks,
+    oneItem: before.items.length === 1 && !before.items[0].due && due.items.length === 1 && due.items[0].due,
+    snoozedOnce: snoozed.items[0].id === first.id && !snoozed.items[0].due && snoozed.items[0].due_at === "2026-11-01T11:00:00.000Z",
+    completedSuppressed, noResurrection, moveCancels,
+    disabled: disabled.items.length === 0 && history.preferences?.enabled === 0 && history.reminders.every(row => row.status === "cancelled"),
+    erasure: !erased.preferences && erased.reminders.length === 0 && (await listReminders(db, other, now + 86400000)).items.length === 1,
   };
 }

@@ -59,8 +59,11 @@ export async function dayTaskCommand(db: D1Database, userId: string, input: unkn
     ]);
     if (!result[1].meta.changes) throw new PrivacyError(409, "Дело изменилось. Обновите список.");
   } else if (body.action === "delete") {
-    const result = await db.prepare("DELETE FROM day_tasks WHERE id=? AND user_id=? AND version=?").bind(body.id, userId, body.version).run();
-    if (!result.meta.changes) throw new PrivacyError(409, "Дело изменилось. Обновите список.");
+    const results = await db.batch([
+      db.prepare("DELETE FROM day_tasks WHERE id=? AND user_id=? AND version=?").bind(body.id, userId, body.version),
+      db.prepare("UPDATE reminders SET status='cancelled',version=version+1,updated_at=? WHERE task_id=? AND user_id=? AND status='scheduled' AND NOT EXISTS (SELECT 1 FROM day_tasks WHERE id=? AND user_id=?)").bind(now, body.id, userId, body.id, userId),
+    ]);
+    if (!results[0].meta.changes) throw new PrivacyError(409, "Дело изменилось. Обновите список.");
   } else {
     if (body.date !== task.task_date) {
       const count = await db.prepare("SELECT count(*) AS n FROM day_tasks WHERE user_id=? AND task_date=?").bind(userId, body.date).first<{ n: number }>();
@@ -68,8 +71,13 @@ export async function dayTaskCommand(db: D1Database, userId: string, input: unkn
     }
     let result;
     try {
-      result = await db.prepare("UPDATE day_tasks SET task_date=?,timezone=?,title=?,title_key=?,status=?,is_focus=CASE WHEN ?='done' OR task_date!=? THEN 0 ELSE is_focus END,version=version+1,updated_at=? WHERE id=? AND user_id=? AND version=?")
-        .bind(body.date, body.timezone, body.title, titleKey(body.title), body.status, body.status, body.date, now, body.id, userId, body.version).run();
+      const results = await db.batch([
+        db.prepare("UPDATE day_tasks SET task_date=?,timezone=?,title=?,title_key=?,status=?,is_focus=CASE WHEN ?='done' OR task_date!=? THEN 0 ELSE is_focus END,version=version+1,updated_at=? WHERE id=? AND user_id=? AND version=?")
+          .bind(body.date, body.timezone, body.title, titleKey(body.title), body.status, body.status, body.date, now, body.id, userId, body.version),
+        db.prepare("UPDATE reminders SET status='cancelled',version=version+1,updated_at=? WHERE task_id=? AND user_id=? AND status='scheduled' AND EXISTS (SELECT 1 FROM day_tasks WHERE id=? AND user_id=? AND version=? AND (status='done' OR task_date!=?))")
+          .bind(now, body.id, userId, body.id, userId, body.version + 1, task.task_date),
+      ]);
+      result = results[0];
     } catch (error) {
       if (String(error).includes("UNIQUE constraint")) throw new PrivacyError(409, "Такое дело уже есть на выбранную дату. Объедините записи вручную.");
       throw error;

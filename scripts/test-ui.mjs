@@ -81,7 +81,7 @@ try {
   if (maintenance) {
     const query = sql => JSON.parse(execFileSync(process.execPath, [wrangler, 'd1', 'execute', TEST_DATABASE_NAME,
       ...base, '--command', sql, '--json'], { cwd: projectRoot, env: environment, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })).flatMap(item => item.results ?? []);
-    const tables = query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('trainer_profiles','trainer_plans','group_requests','day_tasks')");
+    const tables = query("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('trainer_profiles','trainer_plans','group_requests','day_tasks','reminders','reminder_preferences')");
     for (const { name } of tables) {
       assert.equal(query(`SELECT count(*) AS n FROM "${name}"`)[0].n, 0, 'Maintenance must not create product records');
     }
