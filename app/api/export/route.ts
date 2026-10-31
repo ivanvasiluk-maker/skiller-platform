@@ -6,6 +6,7 @@ import { env } from "cloudflare:workers";
 import { getRawDb } from "@/db";
 import { createGoogleSheetsTransport, getGoogleAccessToken } from "@/lib/google-sheets";
 import { runSheetsExport } from "@/lib/sheets-exporter";
+import { boundedRequest, boundaryResponse } from "@/lib/request-boundary";
 
 export const dynamic = "force-dynamic";
 
@@ -16,6 +17,9 @@ type ExportEnv = {
 };
 
 export async function POST(request: Request) {
+  // Consume a bounded body even on early refusal so keep-alive remains usable.
+  try { await boundedRequest(request, 1000); }
+  catch (error) { return boundaryResponse(error); }
   if ((env as unknown as { SKILLER_MAINTENANCE?: string }).SKILLER_MAINTENANCE === "1") return Response.json({ error: "Экспорт приостановлен" }, { status: 503 });
   const secrets = env as unknown as ExportEnv;
   if (!secrets.EXPORT_CRON_SECRET) {
