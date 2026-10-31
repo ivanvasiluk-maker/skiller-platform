@@ -1,3 +1,6 @@
+import { consumeUsage, userUsageBuckets } from "../lib/usage-limits";
+import { ERASURE_TABLES, privacyStatus, requestErasure, purgeAccount } from "../lib/privacy-data";
+import { createGroupRequest, groupEligibility, updateGroupRequest } from "../lib/group-requests";
 import {
   decideRecommendationFromD1,
   type D1RecommendationDecision,
@@ -8,7 +11,7 @@ import {
 } from "../lib/request-idempotency";
 import { persistTrainerSettings } from "../lib/trainer-settings";
 import { dayIndex } from "../lib/trainers";
-import { completeAttempt } from "../lib/skiller-data";
+import { completeAttempt, recommendSkill, startAttempt, ensureUser, ensureSkillCatalog } from "../lib/skiller-data";
 import {
   preparePilotEvent,
   recordPilotEvent,
@@ -22,7 +25,8 @@ import {
 import { requiresSafetyRoute, safetyMessage } from "../lib/trainers";
 import { produceFreeTalkReply } from "../lib/free-talk";
 import { buildFreeTalkFallback, getCharacterBible } from "../lib/character-bible";
-import { trainerCommand } from "../lib/trainer-data";
+import { trainerCommand, trainerState, trainerHistory, ensureTrainerStorage } from "../lib/trainer-data";
+import { buildConversationContext, renderConversationContext } from "../lib/conversation-orchestrator";
 import { runSheetsExport } from "../lib/sheets-exporter";
 import { createInMemorySheets } from "../lib/in-memory-sheets";
 
@@ -441,6 +445,24 @@ async function runSheetsExportCycle(db: D1Database) {
     skillCardVersion: null,
     createdAt: "2026-09-13T09:00:00.000Z",
   });
+  // PATCH 1.1: событие conversation layer попадает в очередь и экспортируется без приватного текста.
+  await recordPilotEvent(db, {
+    id: `sheets-loop-${suffix}`,
+    userId,
+    sessionId: `sheets-session-${suffix}`,
+    trainerId: "beck",
+    dayIndex: 2,
+    eventName: "open_loop_resolved",
+    payload: {
+      loop_id: `loop-${suffix}`,
+      outcome: "done",
+      skill_id: "micro-start",
+      // приватное поле, не должно экспортироваться:
+      text: "приватный текст разговора",
+    } as never,
+    skillCardVersion: skillCardVersion("micro-start"),
+    createdAt: "2026-09-14T09:00:00.000Z",
+  });
 
   const sheets = createInMemorySheets();
   const first = await runSheetsExport(db, sheets.transport);
@@ -487,12 +509,17 @@ async function runSheetsExportCycle(db: D1Database) {
   const myEventRows = eventsTab.filter((row) => row[3] === userId);
   const myEventRowsFinal = eventsFinal.filter((row) => row[3] === userId);
   const myUserRows = usersTab.filter((row) => row[0] === userId);
+  // PATCH 1.1: строка open_loop_resolved экспортирована, приватный текст — нет.
+  const loopRow = eventsFinal.find((row) => row[4] === "open_loop_resolved" && row[3] === userId);
+  const loopRowHasNoPrivateText = loopRow ? !JSON.stringify(loopRow).includes("приватный текст") : false;
 
   return {
     firstFailed: first.failed,
     firstDeadLettered: first.deadLettered,
     myEventRows: myEventRows.length,
     noPrivateText: !JSON.stringify(eventsTab).includes("приватный текст"),
+    loopEventExported: Boolean(loopRow),
+    loopRowHasNoPrivateText,
     myUserRows: myUserRows.length,
     dailyHasHeader: (dailyTab[0]?.[0] ?? null) === "user_id",
     cohortsHasData: cohortsTab.length >= 2,
@@ -561,7 +588,7 @@ async function runOnboardingFlow(db: D1Database) {
     eventNames: events.results.map((row) => row.event_name),
     allVersioned: events.results.every((row) => {
       const payload = JSON.parse(row.payload_json);
-      return payload.product_version === "frozen-mvp-1.0" && payload.character_version === "1.1";
+      return payload.product_version === "frozen-mvp-1.0" && payload.character_version === "1.2";
     }),
     cohortKey: cohort?.cohort_key ?? null,
   };
@@ -784,12 +811,31 @@ async function runAiFallback(db: D1Database) {
     model: "test-model",
     fetchImpl: () => Promise.resolve(valid),
   });
+  // PATCH 1.1: orchestrator instructions (структурированный контекст) — таймаут → тот же fallback.
+  const orchestratorInstructions = [
+    "Ты Марша, AI-тренер.",
+    "USER PROFILE: Тест, день 2.",
+    "TRAINER: Марша, режим explore.",
+    "ACTIVE OPEN LOOPS: «отчёт» → Минимальный старт (due вчера).",
+    "SAFETY STATE: практика разрешена.",
+  ].join("\n");
+  const onOrchestratorTimeout = await produceFreeTalkReply({
+    profile,
+    messages,
+    apiKey: "test-key",
+    model: "test-model",
+    instructionsOverride: orchestratorInstructions,
+    fetchImpl: () => {
+      throw new Error("The operation timed out.");
+    },
+  });
   return {
     onTimeoutIsFallback: onTimeout === expectedFallback,
     onMalformedIsFallback: onMalformed === expectedFallback,
     onHostileIsFallback: onHostile === expectedFallback,
     onValidPassThrough: onValid.startsWith("Понимаю"),
     fallbackMentionsBridge: onTimeout.includes("действие"),
+    onOrchestratorTimeoutIsFallback: onOrchestratorTimeout === expectedFallback,
   };
 }
 
@@ -855,6 +901,7 @@ async function runAdjustmentCycle(db: D1Database) {
   const replacedPlan = afterReplace.plans[0];
   await command(userA, sessionA, { action: "start", planId: replacedPlan.id });
   await command(userA, sessionA, { action: "outcome", planId: replacedPlan.id, result: "done", helpfulness: 7 });
+  await command(userA, sessionA, { action: "message", mode: "talk", text: "Помогло убрать телефон со стола" });
   const afterRepeat = await command(userA, sessionA, {
     action: "situation", mode: "stuck", kind: "stuck", signal: "thought",
     urge: "distract", intensity: 5, risk: "no",
@@ -924,6 +971,7 @@ async function runWeekCycle(db: D1Database) {
   const pseudonym = day1.profile?.pseudonym ?? "";
   await command({ action: "start", planId: plan1.id });
   await command({ action: "outcome", planId: plan1.id, result: "done", helpfulness: 7 });
+  await command({ action: "message", mode: "talk", text: "Помогло заранее открыть документ" });
   // Доказательство для transfer на Day 5: distract-delay помог в конфликте.
   await seedOutcome(db, user.userId, "distract-delay", "conflict", { completed: true, helpfulness: 7, avoidance: false });
 
@@ -954,6 +1002,7 @@ async function runWeekCycle(db: D1Database) {
   const plan2 = day4.plans[0];
   await command({ action: "start", planId: plan2.id });
   await command({ action: "outcome", planId: plan2.id, result: "done", helpfulness: 8 });
+  await command({ action: "message", mode: "talk", text: "Помогло начать с одного заголовка" });
 
   // Day 5: transfer — другой вход, доказательство из конфликтного контекста.
   await setDay(5);
@@ -961,6 +1010,7 @@ async function runWeekCycle(db: D1Database) {
   const plan3 = day5.plans[0];
   await command({ action: "start", planId: plan3.id });
   await command({ action: "outcome", planId: plan3.id, result: "failed", helpfulness: 3 });
+  await command({ action: "message", mode: "talk", text: "Отвлекло входящее сообщение" });
 
   // Day 6: replacement после неудачной попытки.
   await setDay(6);
@@ -973,6 +1023,7 @@ async function runWeekCycle(db: D1Database) {
   const afterSwitch = await command({ action: "settings", trainerId: "skinny" });
   await command({ action: "start", planId: plan4.id });
   await command({ action: "outcome", planId: plan4.id, result: "done", helpfulness: 7 });
+  await command({ action: "message", mode: "talk", text: "Помог короткий и конкретный шаг" });
   await command({ action: "feedback", helpfulness: 8, understood: 9, continueIntent: 7, helped: "Маленькие шаги", annoyed: "" });
   const feedbackRow = await db
     .prepare("SELECT count(*) AS count FROM pilot_feedback WHERE user_id=?")
@@ -1006,6 +1057,497 @@ async function runWeekCycle(db: D1Database) {
     // В тестовом worker'е нет OPENAI_API_KEY: весь цикл проходит на детерминированных fallback'ах.
     noAiEvents: !names.has("mechanism_generated"),
   };
+}
+
+/** PATCH 1.1: Day 1 → open loop → Day 2 follow-up → 4 ветки результата. */
+async function runRelationshipCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const makeUser = (tag: string) => ({
+    userId: `rel-${tag}-${suffix}`,
+    displayName: `Rel ${tag}`,
+    email: `rel-${tag}-${suffix}@example.invalid`,
+    fullName: null,
+  });
+  const command = (user: ReturnType<typeof makeUser>, sessionId: string, body: Record<string, unknown>) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  const eventsFor = async (userId: string) => {
+    const rows = await db
+      .prepare("SELECT event_name FROM pilot_events WHERE user_id=?")
+      .bind(userId)
+      .all<{ event_name: string }>();
+    return new Set(rows.results.map((r) => r.event_name));
+  };
+
+  // Day 1: DONE ветка
+  const userDone = makeUser("done");
+  const sDone = crypto.randomUUID();
+  await command(userDone, sDone, { action: "onboard", name: "Д", trainerId: "beck", text: "Откладываю отчёт", consent: true });
+  const sitDone = await command(userDone, sDone, { action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 6, risk: "no", text: "Не могу начать отчёт" });
+  const planDone = sitDone.plans[0];
+  const loopCreatedDone = sitDone.openLoops.length === 1;
+  await command(userDone, sDone, { action: "start", planId: planDone.id });
+  await command(userDone, sDone, { action: "outcome", planId: planDone.id, result: "done", helpfulness: 8 });
+  await command(userDone, sDone, { action: "message", mode: "talk", text: "Помогло заранее открыть документ" });
+  const evDone = await eventsFor(sitDone.profile?.pseudonym ?? "");
+  const resolvedDone = await db.prepare("SELECT status, outcome FROM open_loops WHERE plan_id=?").bind(planDone.id).first<{ status: string; outcome: string }>();
+
+  // Day 2: follow-up shown + answered
+  const userFup = makeUser("fup");
+  const sFup = crypto.randomUUID();
+  await command(userFup, sFup, { action: "onboard", name: "В", trainerId: "marsha", text: "Прокрастинация", consent: true });
+  const sitFup = await command(userFup, sFup, { action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю звонок" });
+  const loopFup = sitFup.openLoops[0];
+  // Перематываем follow_up_due в прошлое, чтобы loop стал due.
+  await db.prepare("UPDATE open_loops SET follow_up_due=? WHERE id=?").bind(new Date(Date.now() - 3600000).toISOString(), loopFup.id).run();
+  const fupReply = await command(userFup, sFup, { action: "message", mode: "talk", text: "Привет, я вернулся" });
+  const evFup = await eventsFor(fupReply.profile?.pseudonym ?? "");
+  const fupState = await db.prepare("SELECT follow_up_shown_at, status FROM open_loops WHERE id=?").bind(loopFup.id).first<{ follow_up_shown_at: string | null; status: string }>();
+
+  // PARTIAL ветка
+  const userPartial = makeUser("partial");
+  const sPartial = crypto.randomUUID();
+  await command(userPartial, sPartial, { action: "onboard", name: "П", trainerId: "skinny", text: "Застреваю", consent: true });
+  const sitPartial = await command(userPartial, sPartial, { action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Не доделал задачу" });
+  const planPartial = sitPartial.plans[0];
+  await command(userPartial, sPartial, { action: "start", planId: planPartial.id });
+  await command(userPartial, sPartial, { action: "outcome", planId: planPartial.id, result: "partial", helpfulness: 5 });
+  await command(userPartial, sPartial, { action: "message", mode: "talk", text: "Остановился после первого абзаца" });
+  const evPartial = await eventsFor(sitPartial.profile?.pseudonym ?? "");
+
+  // NOT_DONE ветка
+  const userNotDone = makeUser("notdone");
+  const sNotDone = crypto.randomUUID();
+  await command(userNotDone, sNotDone, { action: "onboard", name: "Н", trainerId: "beck", text: "Избегание", consent: true });
+  const sitNotDone = await command(userNotDone, sNotDone, { action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 6, risk: "no", text: "Не начал задачу" });
+  const planNotDone = sitNotDone.plans[0];
+  await command(userNotDone, sNotDone, { action: "start", planId: planNotDone.id });
+  await command(userNotDone, sNotDone, { action: "outcome", planId: planNotDone.id, result: "failed", helpfulness: 3 });
+  await command(userNotDone, sNotDone, { action: "message", mode: "talk", text: "Не открыл документ из-за уведомлений" });
+  const evNotDone = await eventsFor(sitNotDone.profile?.pseudonym ?? "");
+
+  // SKILL_REJECTED ветка: не защищаем рекомендацию, сохраняем причину.
+  const userRejected = makeUser("rejected");
+  const sRejected = crypto.randomUUID();
+  await command(userRejected, sRejected, { action: "onboard", name: "Р", trainerId: "marsha", text: "Не подходит упражнение", consent: true });
+  const sitRejected = await command(userRejected, sRejected, { action: "situation", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 4, risk: "no", text: "Нужно ответить на письмо" });
+  const planRejected = sitRejected.plans[0];
+  await command(userRejected, sRejected, { action: "reject", planId: planRejected.id });
+  await command(userRejected, sRejected, { action: "message", mode: "talk", text: "Слишком много шагов и непонятные слова" });
+  const evRejected = await eventsFor(sitRejected.profile?.pseudonym ?? "");
+
+  // Персистентная память: success factor (DONE) и intervention memory (PARTIAL/NOT_DONE).
+  const successFactors = await db
+    .prepare("SELECT count(*) AS count FROM success_factors WHERE user_id=?")
+    .bind(userDone.userId)
+    .first<{ count: number }>();
+  const interventionPartial = await db
+    .prepare("SELECT outcome, chain_break_point FROM intervention_memory WHERE user_id=?")
+    .bind(userPartial.userId)
+    .first<{ outcome: string; chain_break_point: string }>();
+  const interventionNotDone = await db
+    .prepare("SELECT outcome, missing_link FROM intervention_memory WHERE user_id=?")
+    .bind(userNotDone.userId)
+    .first<{ outcome: string; missing_link: string }>();
+  const interventionRejected = await db
+    .prepare("SELECT outcome, rejection_reason FROM intervention_memory WHERE user_id=?")
+    .bind(userRejected.userId)
+    .first<{ outcome: string; rejection_reason: string }>();
+
+  return {
+    loopCreatedDone,
+    resolvedDone: resolvedDone ?? null,
+    doneEvents: {
+      outcome_done: evDone.has("outcome_done"),
+      success_factor: evDone.has("success_factor_identified"),
+      open_loop_resolved: evDone.has("open_loop_resolved"),
+    },
+    successFactorsStored: Number(successFactors?.count ?? 0),
+    interventionPartial: interventionPartial ?? null,
+    interventionNotDone: interventionNotDone ?? null,
+    interventionRejected: interventionRejected ?? null,
+    rejectedEvent: evRejected.has("skill_rejected"),
+    followUp: {
+      shown: evFup.has("follow_up_shown"),
+      answered: evFup.has("follow_up_answered"),
+      conversation_started: evFup.has("conversation_started"),
+      shownAt: Boolean(fupState?.follow_up_shown_at),
+      status: fupState?.status ?? null,
+    },
+    partialEvents: {
+      outcome_partial: evPartial.has("outcome_partial"),
+      chain_started: evPartial.has("chain_analysis_started"),
+      chain_completed: evPartial.has("chain_analysis_completed"),
+    },
+    notDoneEvents: {
+      outcome_not_done: evNotDone.has("outcome_not_done"),
+      missing_link_started: evNotDone.has("missing_link_started"),
+      missing_link_completed: evNotDone.has("missing_link_completed"),
+    },
+  };
+}
+
+/** Conversation-first: вопрос → гипотеза → исправление → подтверждение → практика. */
+async function runSeparateOutcomeCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const user = { userId: `separate-${suffix}`, displayName: "Outcome Test", email: `${suffix}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "marsha", text: "Хочу делать паузу перед ответом", consent: true });
+  const prepared = await command({ action: "quickStop", text: "Хочу остановиться перед резким ответом", intensity: 5, risk: "no", urge: "attack" });
+  const plan = prepared.plans[0];
+  await command({ action: "start", planId: plan.id });
+  await command({ action: "performance", planId: plan.id, result: "partial" });
+  const reopened = await command({ action: "open", sessionId: crypto.randomUUID() });
+  const beforeBenefit = await db.prepare("SELECT COUNT(*) AS count FROM outcomes WHERE user_id=?").bind(user.userId).first<{ count: number }>();
+  let contradictionBlocked = false;
+  try { await command({ action: "outcome", planId: plan.id, result: "done", helpfulness: 8, intensity: 4 }); } catch { contradictionBlocked = true; }
+  const worsened = await command({ action: "outcome", planId: plan.id, result: "partial", helpfulness: 0, intensity: 7, worsened: true });
+  const outcome = await db.prepare("SELECT completed,helpfulness,note FROM outcomes WHERE user_id=?").bind(user.userId).first<{ completed: number; helpfulness: number; note: string }>();
+  const afterExplanation = await command({ action: "message", mode: "talk", text: "Напряжение усилилось, когда я наблюдал за собой" });
+  const next = await command({ action: "quickStop", text: "Хочу сделать паузу перед ответом", intensity: 4, risk: "no", urge: "attack" });
+  return {
+    resumedBenefit: reopened.plans[0].reported_result === "partial" && reopened.plans[0].result === null,
+    benefitUnknown: reopened.plans[0].helpfulness === null && beforeBenefit?.count === 0,
+    contradictionBlocked,
+    worseningStored: worsened.plans[0].worsened === 1 && outcome?.note === "benefit:worsened",
+    noFullCompletion: outcome?.completed === 0,
+    noSuccessFollowUp: worsened.pendingFollowUp?.kind === "worsened",
+    explanationSaved: afterExplanation.pendingFollowUp === null,
+    replacement: JSON.parse(next.plans[0].skill_json).id !== "stop",
+  };
+}
+
+async function runQuickStopCycle() {
+  const cases = [];
+  for (const outcome of ["done", "partial", "failed", "reject"] as const) {
+    const suffix = crypto.randomUUID();
+    const user = { userId: `quick-stop-${suffix}`, displayName: "STOP Test", email: `${suffix}@example.invalid`, fullName: null };
+    const sessionId = crypto.randomUUID();
+    const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+    await command({ action: "onboard", name: "Тест", trainerId: "marsha", text: "Хочу делать паузу перед ответом", consent: true });
+    const requestId = crypto.randomUUID();
+    const payload = { action: "quickStop", text: "Хочу сделать паузу перед ответом коллеге", intensity: 4, risk: "no", urge: "attack", requestId, sessionId };
+    const prepared = await trainerCommand(user, payload);
+    const duplicate = await trainerCommand(user, payload);
+    const plan = prepared.plans[0];
+    let blocked = false;
+    try { await command({ ...payload, requestId: crypto.randomUUID() }); } catch { blocked = true; }
+    if (outcome === "reject") await command({ action: "reject", planId: plan.id });
+    else {
+      await command({ action: "start", planId: plan.id });
+      await command({ action: "outcome", planId: plan.id, result: outcome, helpfulness: 6, intensity: 3 });
+    }
+    const reopened = await command({ action: "open", sessionId: crypto.randomUUID() });
+    cases.push({ outcome, stop: JSON.parse(plan.skill_json).id === "stop", noAttemptOnPrepare: !plan.attempt_id,
+      ownSituation: prepared.messages.some(message => message.text === payload.text),
+      duplicateSafe: duplicate.plans.length === 1 && duplicate.plans[0].id === plan.id,
+      blocked, saved: reopened.plans[0].result === (outcome === "reject" ? "failed" : outcome),
+      attempted: Boolean(reopened.plans[0].attempt_id) === (outcome !== "reject"),
+      resolved: reopened.openLoops.length === 0,
+      rejectionDistinct: outcome !== "reject" || reopened.pendingFollowUp?.kind === "rejection" });
+  }
+  const suffix = crypto.randomUUID();
+  const user = { userId: `quick-safety-${suffix}`, displayName: "Safety Test", email: `${suffix}@example.invalid`, fullName: null };
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId: crypto.randomUUID(), ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "marsha", text: "Хочу делать паузу перед ответом", consent: true });
+  const unsafe = await command({ action: "quickStop", text: "Хочу сделать паузу перед ответом", intensity: 4, risk: "unknown", urge: "attack" });
+  return { cases, safetyBlocked: Boolean(unsafe.profile?.safety_flag) && unsafe.plans.length === 0 };
+}
+
+async function runHistoryCycle(db: D1Database) {
+  const id = crypto.randomUUID();
+  const user = { userId: `history-${id}`, displayName: "History", email: `${id}@example.invalid`, fullName: null };
+  await trainerCommand(user, { action: "onboard", name: "Тест", trainerId: "beck", text: "История", consent: true, requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  const ids = Array.from({ length: 125 }, () => crypto.randomUUID());
+  await db.batch(ids.map((messageId, index) => db.prepare("INSERT INTO trainer_messages (id,user_id,role,text,trainer_id,created_at) VALUES (?,?,?,?,?,?)").bind(messageId,user.userId,"user",`Message ${index}`,"beck","2026-10-04T10:00:00.000Z")));
+  const current = await trainerState(user);
+  const earlier = await trainerHistory(user,current.messages[0].id);
+  const oldest = await trainerHistory(user,earlier.messages[0].id);
+  const all = [...oldest.messages,...earlier.messages,...current.messages];
+  let foreignCursorBlocked = false;
+  try { await trainerHistory({ ...user, userId: `another-${id}` },ids[0]); } catch { foreignCursorBlocked = true; }
+  return { currentBounded: current.messages.length === 60 && current.hasEarlierMessages === true, pageBounded: earlier.messages.length === 60 && earlier.hasEarlierMessages === true, reachesStart: oldest.messages.length === 6 && !oldest.hasEarlierMessages, noDuplicates: new Set(all.map(message => message.id)).size === 126, tiedTimesInOrder: all.slice(1).every((message,index) => message.id === ids[index]), foreignCursorBlocked };
+}
+
+async function runPauseCycle(db: D1Database) {
+  const id = crypto.randomUUID();
+  const user = { userId: `pause-${id}`, displayName: "Pause", email: `${id}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "beck", text: "Откладываю работу", consent: true });
+  const state = await command({ action: "situation", analysisDepth: "direct", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Помоги начать отчёт с маленького шага" });
+  const plan = state.plans[0];
+  const loop = state.openLoops.find(item => item.plan_id === plan.id);
+  if (!plan || !loop) throw new Error("Missing practice");
+  let detailsBlockedBeforePerformance = false;
+  try { await command({ action: "performanceDetails", planId: plan.id, completedPart: "Выдуманный результат", stoppingPoint: "" }); } catch { detailsBlockedBeforePerformance = true; }
+  const paused = await command({ action: "pause", planId: plan.id });
+  const returned = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  let staleStartBlocked = false;
+  try { await command({ action: "start", planId: plan.id }); } catch { staleStartBlocked = true; }
+  const attempts = await db.prepare("SELECT COUNT(*) AS count FROM skill_attempts WHERE user_id=?").bind(user.userId).first<{ count: number }>();
+  await command({ action: "newSituation" });
+  const newAnalysis = await command({ action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю уборку кухни" });
+  let analysisBlocksResume = false;
+  try { await command({ action: "resume", planId: plan.id }); } catch { analysisBlocksResume = true; }
+  await command({ action: "newSituation", analysisId: newAnalysis.pendingSituationAnalysis?.id });
+  const resumed = await command({ action: "resume", planId: plan.id });
+  await command({ action: "start", planId: plan.id });
+  await command({ action: "performance", planId: plan.id, result: "partial" });
+  await command({ action: "performanceDetails", planId: plan.id, completedPart: "Открыл документ и написал заголовок", stoppingPoint: "Не начал первый абзац" });
+  const requestId = crypto.randomUUID();
+  const reportedPause = await command({ action: "pause", planId: plan.id, requestId });
+  const duplicate = await command({ action: "pause", planId: plan.id, requestId });
+  const reportedResume = await command({ action: "resume", planId: plan.id });
+  const detailsReturned = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  const ctx = await buildConversationContext({ userId: user.userId, profile: detailsReturned.profile, messages: detailsReturned.messages, plans: detailsReturned.plans, engagedDays: detailsReturned.engagedDays });
+  const instructions = renderConversationContext(ctx);
+  const reply = await command({ action: "message", mode: "talk", text: "Что я уже успел сделать?" });
+  const lastReply = reply.messages.filter(message => message.role === "assistant").at(-1)?.text ?? "";
+  const outcomes = await db.prepare("SELECT COUNT(*) AS count FROM outcomes WHERE attempt_id=?").bind(reportedResume.plans[0].attempt_id).first<{ count: number }>();
+  return { detailsInConversation: lastReply.includes("Открыл документ и написал заголовок") && lastReply.includes("Не начал первый абзац"), detailsInContext: ctx.partialPerformance?.[0]?.completedPart === "Открыл документ и написал заголовок" && ctx.partialPerformance?.[0]?.benefit === null && instructions.includes("не инструкции модели"), detailsInRecap: detailsReturned.recap.facts.some(fact => fact.includes("Открыл документ и написал заголовок") && fact.includes("польза пока не оценена")), detailsBlockedBeforePerformance, detailsPersisted: detailsReturned.plans[0].completed_part === "Открыл документ и написал заголовок" && detailsReturned.plans[0].stopping_point === "Не начал первый абзац", noFakeAttempt: attempts?.count === 0, noFakeResult: paused.plans[0].result === null && paused.plans[0].helpfulness === null, persisted: Boolean(returned.plans[0].paused), noActiveReminder: !paused.openLoops.some(item => item.plan_id === plan.id && item.status === "active") && !paused.continuity.openLoop, staleStartBlocked, analysisBlocksResume, sameStep: resumed.plans[0].id === plan.id && resumed.openLoops.find(item => item.plan_id === plan.id)?.planned_action === loop.planned_action, reportPreserved: reportedResume.plans[0].reported_result === "partial" && reportedResume.plans[0].result === null && outcomes?.count === 0, idempotent: reportedPause.messages.length === duplicate.messages.length };
+}
+
+async function runCommunicationPreferencesCycle() {
+  const id = crypto.randomUUID();
+  const user = { userId: `preferences-${id}`, displayName: "Preferences", email: `${id}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  const initial = await command({ action: "onboard", name: "Тест", trainerId: "beck", text: "Откладываю работу", consent: true });
+  const asked = await command({ action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю отчёт и открываю новости" });
+  const addressed = await command({ action: "settings", addressForm: "informal" });
+  const gendered = await command({ action: "settings", grammaticalGender: "feminine" });
+  const revised = await command({ action: "message", mode: "stuck", text: "Мне кажется, я не справлюсь" });
+  const declined = await command({ action: "message", mode: "stuck", text: "Нет" });
+  const planned = await command({ action: "message", mode: "stuck", text: "Мне кажется, я не справлюсь" });
+  const practice = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
+  const duringPractice = await command({ action: "settings", grammaticalGender: "masculine" });
+  const restoredGender = await command({ action: "settings", grammaticalGender: "feminine" });
+  const rejected = await command({ action: "reject", planId: practice.plans[0]?.id });
+  const quoted = "Вы сказали: я не готова";
+  const explained = await command({ action: "message", mode: "stuck", text: quoted });
+  const changed = await command({ action: "settings", addressForm: "formal" });
+  const reloaded = await trainerCommand(user, { action: "open", requestId: crypto.randomUUID(), sessionId: crypto.randomUUID() });
+  let invalidBlocked = false;
+  try { await command({ action: "settings", grammaticalGender: "guess" }); } catch { invalidBlocked = true; }
+  return {
+    defaults: initial.profile?.address_form === "formal" && initial.profile?.grammatical_gender === "neutral",
+    independent: addressed.profile?.grammatical_gender === "neutral" && gendered.profile?.address_form === "informal",
+    persisted: reloaded.profile?.address_form === "formal" && reloaded.profile?.grammatical_gender === "feminine",
+    questionPreserved: JSON.stringify(asked.pendingSituationAnalysis) === JSON.stringify(gendered.pendingSituationAnalysis) && JSON.stringify(asked.messages) === JSON.stringify(gendered.messages),
+    practicePreserved: planned.pendingSituationAnalysis !== null && practice.plans.length > 0 && JSON.stringify(practice.plans) === JSON.stringify(duringPractice.plans) && restoredGender.profile?.grammatical_gender === "feminine",
+    hypothesisCorrectionAddress: planned.messages.at(-1)?.text.includes("поправь одним предложением") === true,
+    hypothesisAddress: declined.messages.at(-1)?.text.includes("твоим опытом") === true && revised.pendingSituationAnalysis !== null,
+    rejectionAddress: rejected.messages.at(-1)?.text.includes("убеждать тебя") === true,
+    userQuotePreserved: explained.messages.some(message => message.role === "user" && message.text === quoted),
+    historyPreserved: rejected.messages.every(message => changed.messages.some(saved => saved.id === message.id && saved.text === message.text)),
+    invalidBlocked,
+  };
+}
+
+async function runNewSituationCycle() {
+  const id = crypto.randomUUID();
+  const user = { userId: `new-situation-${id}`, displayName: "New Situation", email: `${id}@example.invalid`, fullName: null };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) => trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+  await command({ action: "onboard", name: "Тест", trainerId: "beck", text: "Откладываю работу", consent: true });
+  const original = await command({ action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck", signal: "thought", urge: "avoid", intensity: 5, risk: "no", text: "Откладываю отчёт и открываю новости" });
+  const oldId = original.pendingSituationAnalysis?.id;
+  if (!oldId) throw new Error("Missing initial analysis");
+  let staleBlocked = false;
+  try { await command({ action: "newSituation", analysisId: crypto.randomUUID() }); } catch { staleBlocked = true; }
+  const requestId = crypto.randomUUID();
+  const fresh = await command({ action: "newSituation", analysisId: oldId, requestId });
+  const duplicate = await command({ action: "newSituation", analysisId: oldId, requestId });
+  const next = await command({ action: "situation", analysisDepth: "simple", mode: "distress", kind: "emotion", signal: "emotion", urge: "withdraw", intensity: 5, risk: "no", text: "Расстроился после разговора с другом" });
+  const hypothesized = await command({ action: "message", mode: "distress", text: "Мне кажется, меня не услышали" });
+  const planned = await command({ action: "message", mode: "distress", text: "Да, похоже" });
+  let planBlocked = false;
+  try { await command({ action: "newSituation" }); } catch { planBlocked = true; }
+  return { staleBlocked, oldAnalysisClosed: !fresh.pendingSituationAnalysis, noFakeResult: fresh.plans.length === 0, idempotent: fresh.messages.length === duplicate.messages.length, separateAnalysis: next.pendingSituationAnalysis?.id !== oldId && next.pendingSituationAnalysis?.original_text === "Расстроился после разговора с другом", hypothesisSeparate: hypothesized.pendingSituationAnalysis?.id === next.pendingSituationAnalysis?.id, planBlocked: planBlocked && planned.plans.some(plan => !plan.result) };
+}
+
+async function runSimpleAnalysisCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const user = {
+    userId: `analysis-${suffix}`,
+    displayName: "Analysis Cycle",
+    email: `analysis-${suffix}@example.invalid`,
+    fullName: null,
+  };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+
+  await command({ action: "onboard", name: "Ирина", trainerId: "beck", text: "Откладываю важные задачи", consent: true });
+  const asked = await command({
+    action: "situation", analysisDepth: "simple", mode: "stuck", kind: "stuck",
+    signal: "thought", urge: "avoid", intensity: 6, risk: "no",
+    text: "Нужно открыть отчёт и написать первый заголовок, но я откладываю",
+  });
+  const hypothesized = await command({ action: "message", mode: "stuck", text: "Я думаю, что отчёт получится плохим" });
+  const rejected = await command({ action: "message", mode: "stuck", text: "Нет" });
+  const corrected = await command({ action: "message", mode: "stuck", text: "Я боюсь не уложиться в срок и поэтому замираю" });
+  const completed = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
+
+  // Continue the same confirmed plan in a new session, without replaying onboarding.
+  const plan = completed.plans[0];
+  const loop = completed.openLoops[0];
+  if (!plan || !loop) throw new Error("Confirmed analysis did not persist a plan and open loop");
+  await command({ action: "start", planId: plan.id });
+  await db.prepare("UPDATE open_loops SET follow_up_due=? WHERE id=?")
+    .bind(new Date(Date.now() - 3600000).toISOString(), loop.id).run();
+  const nextSessionId = crypto.randomUUID();
+  const returnCommand = (body: Record<string, unknown>) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId: nextSessionId, ...body });
+  const reopened = await returnCommand({ action: "open" });
+  const reported = await returnCommand({ action: "outcome", planId: plan.id, result: "done", helpfulness: 8 });
+  await returnCommand({ action: "message", mode: "talk", text: "Помогло заранее открыть документ и убрать уведомления" });
+  const afterReturn = await returnCommand({ action: "open" });
+  const factor = await db.prepare("SELECT COUNT(*) AS count FROM success_factors WHERE user_id=?")
+    .bind(user.userId).first<{ count: number }>();
+  const resolved = await db.prepare("SELECT status, outcome FROM open_loops WHERE id=?")
+    .bind(loop.id).first<{ status: string; outcome: string }>();
+
+  return {
+    returnCycle: {
+      samePlan: reopened.plans.some(item => item.id === plan.id),
+      sameAction: reopened.dueLoop?.planned_action === loop.planned_action,
+      successAnalysisStarted: reported.pendingFollowUp?.kind === "success",
+      successFactorStored: (factor?.count ?? 0) > 0,
+      loopResolved: resolved?.status === "resolved" && resolved.outcome === "done",
+      followUpCompleted: afterReturn.pendingFollowUp === null,
+      noExtraPlan: afterReturn.plans.length === 1,
+    },
+    noPlanBeforeConfirmation: asked.plans.length === 0 && hypothesized.plans.length === 0,
+    stages: [
+      asked.pendingSituationAnalysis?.stage ?? null,
+      hypothesized.pendingSituationAnalysis?.stage ?? null,
+      rejected.pendingSituationAnalysis?.stage ?? null,
+      corrected.pendingSituationAnalysis?.stage ?? null,
+    ],
+    correctedHypothesis: corrected.pendingSituationAnalysis?.hypothesis.includes("не уложиться в срок") ?? false,
+    completed: completed.pendingSituationAnalysis === null,
+    planCreated: completed.plans.length === 1,
+    openLoopCreated: completed.openLoops.length === 1,
+    fullPracticeSteps: completed.plans[0] ? (JSON.parse(completed.plans[0].skill_json) as { steps: unknown[] }).steps.length : 0,
+  };
+}
+
+/** Подробная поведенческая цепочка → подтверждение → Skill Engine → практика. */
+async function runBehaviorChainCycle(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const user = {
+    userId: `behavior-chain-${suffix}`,
+    displayName: "Behavior Chain",
+    email: `behavior-chain-${suffix}@example.invalid`,
+    fullName: null,
+  };
+  const sessionId = crypto.randomUUID();
+  const command = (body: Record<string, unknown>) =>
+    trainerCommand(user, { requestId: crypto.randomUUID(), sessionId, ...body });
+
+  await command({ action: "onboard", name: "Анна", trainerId: "marsha", text: "Хочу меньше избегать рабочих задач", consent: true });
+  const started = await command({
+    action: "situation", analysisDepth: "complex", mode: "stuck", kind: "stuck",
+    signal: "thought", urge: "distract", intensity: 7, risk: "no",
+    text: "Нужно закончить отчёт, но я ухожу в новости",
+  });
+  const stages: Array<string | null> = [started.pendingSituationAnalysis?.stage ?? null];
+  for (const answer of [
+    "Я открыла почту и увидела напоминание о сроке",
+    "Я подумала, что уже слишком поздно и я не успею",
+    "Появились тревога и тяжесть в груди",
+    "Захотелось закрыть документ и отвлечься",
+    "Я открыла новости вместо отчёта",
+  ]) {
+    const state = await command({ action: "message", mode: "stuck", text: answer });
+    stages.push(state.pendingSituationAnalysis?.stage ?? null);
+  }
+  const summarized = await command({
+    action: "message", mode: "stuck",
+    text: "Сразу стало легче, а вечером тревога усилилась и отчёт остался",
+  });
+  stages.push(summarized.pendingSituationAnalysis?.stage ?? null);
+  const rejected = await command({ action: "message", mode: "stuck", text: "Нет" });
+  const editSelected = await command({ action: "message", mode: "stuck", text: "Мысль или смысл" });
+  await command({
+    action: "message", mode: "stuck",
+    text: "Первым сигналом было не письмо, а мысль, что работа должна быть идеальной",
+  });
+  const secondRejected = await command({ action: "message", mode: "stuck", text: "Нет" });
+  const secondEditSelected = await command({ action: "message", mode: "stuck", text: "Действие" });
+  const secondCorrected = await command({
+    action: "message", mode: "stuck",
+    text: "Я не открыла новости, а стала бесконечно править план отчёта",
+  });
+  const choice = await command({ action: "message", mode: "stuck", text: "Да, похоже" });
+  const completed = await command({ action: "message", mode: "stuck", text: "Мысль и интерпретация" });
+  const remembered = await command({
+    action: "situation", analysisDepth: "complex", mode: "stuck", kind: "stuck",
+    signal: "thought", urge: "distract", intensity: 5, risk: "no",
+    text: "Снова откладываю подготовку документа и читаю новости",
+  });
+  const dismissed = await command({ action: "dismissMemory" });
+  const currentAnalysisId = remembered.pendingSituationAnalysis?.id ?? "";
+  await db.prepare("UPDATE conversation_analysis_sessions SET memory_dismissed=0 WHERE id=?").bind(currentAnalysisId).run();
+  const memoryConfirmed = await command({ action: "confirmMemory" });
+  const memoryRows = await db.prepare(
+    "SELECT thought,urge,action,intervention_point FROM behavioral_memory WHERE user_id=?",
+  ).bind(user.userId).all<{ thought: string; urge: string; action: string; intervention_point: string }>();
+  const chain = secondCorrected.pendingSituationAnalysis
+    ? JSON.parse(secondCorrected.pendingSituationAnalysis.chain_json) as Record<string, string>
+    : {};
+
+  return {
+    noPlanDuringChain: summarized.plans.length === 0,
+    stages,
+    correctionStage: rejected.pendingSituationAnalysis?.stage ?? null,
+    editStage: editSelected.pendingSituationAnalysis?.stage ?? null,
+    correctedLinkStored: chain.thought?.includes("идеальной") ?? false,
+    secondCorrectionStage: secondRejected.pendingSituationAnalysis?.stage ?? null,
+    secondEditStage: secondEditSelected.pendingSituationAnalysis?.stage ?? null,
+    secondCorrectedLinkStored: chain.action?.includes("править план") ?? false,
+    summaryComplete: ["Событие:", "Мысль или смысл:", "Эмоции и тело:", "Импульс:", "Действие:", "Последствия:", "Точка для вмешательства"].every((part) => secondCorrected.pendingSituationAnalysis?.hypothesis.includes(part)),
+    choiceStage: choice.pendingSituationAnalysis?.stage ?? null,
+    completed: completed.pendingSituationAnalysis === null,
+    planCreated: completed.plans.length === 1,
+    openLoopCreated: completed.openLoops.length === 1,
+    selectedSkill: completed.plans[0] ? (JSON.parse(completed.plans[0].skill_json) as { id: string }).id : null,
+    fullPracticeSteps: completed.plans[0] ? (JSON.parse(completed.plans[0].skill_json) as { steps: unknown[] }).steps.length : 0,
+    memoryStored: memoryRows.results.length === 1 && memoryRows.results[0]?.intervention_point === "thought",
+    memoryShownAsContextCard: remembered.contextualMemory?.thought.includes("идеальной") ?? false,
+    memoryCardDismissed: dismissed.contextualMemory === null,
+    memoryDraftStage: memoryConfirmed.pendingSituationAnalysis?.stage ?? null,
+    memoryDraftRequiresConfirmation: memoryConfirmed.messages.at(-1)?.text.includes("как черновик") ?? false,
+  };
+}
+
+async function runInterventionRouting() {
+  const points = ["thought", "body", "urge", "action"] as const;
+  const routed: Record<string, string | null> = {};
+  for (const point of points) {
+    const suffix = crypto.randomUUID();
+    const user = { userId: `point-${point}-${suffix}`, displayName: point, email: `${point}-${suffix}@example.invalid`, fullName: null };
+    const result = await recommendSkill(user, {
+      kind: "stuck",
+      description: "Откладываю отчёт и переключаюсь на новости",
+      firstSignal: "thought",
+      actionUrge: "distract",
+      desiredDirection: "goal",
+      importantGoal: "Закончить отчёт",
+      intensity: 6,
+      risk: "no",
+      interventionPoint: point,
+    });
+    routed[point] = result.skill?.id ?? null;
+  }
+  const safetyUser = { userId: `point-safety-${crypto.randomUUID()}`, displayName: "Safety", email: `safety-${crypto.randomUUID()}@example.invalid`, fullName: null };
+  const highIntensity = await recommendSkill(safetyUser, {
+    kind: "stuck", description: "Очень сильное напряжение", firstSignal: "thought", actionUrge: "avoid",
+    desiredDirection: "goal", importantGoal: "Вернуть контроль", intensity: 9, risk: "no", interventionPoint: "thought",
+  });
+  return { ...routed, highIntensity: highIntensity.skill?.id ?? null };
 }
 
 async function runPilotAnalytics(db: D1Database) {
@@ -1106,6 +1648,8 @@ const worker: ExportedHandler<Env> = {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
       return Response.json(row);
     }
+    if (request.method === "POST" && url.pathname === "/release-readiness") { try { return Response.json(await runReleaseReadiness(env.DB)); } catch (error) { return Response.json({ error: String(error), stack: error instanceof Error ? error.stack : "" }, { status: 500 }); } }
+    if (request.method === "POST" && url.pathname === "/release-safety") return Response.json(await runReleaseSafety(env.DB));
     if (request.method === "POST" && url.pathname === "/pilot-analytics") {
       return Response.json(await runPilotAnalytics(env.DB));
     }
@@ -1132,6 +1676,28 @@ const worker: ExportedHandler<Env> = {
     }
     if (request.method === "POST" && url.pathname === "/week-cycle") {
       return Response.json(await runWeekCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/relationship-cycle") {
+      return Response.json(await runRelationshipCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/separate-outcome-cycle") {
+      return Response.json(await runSeparateOutcomeCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/quick-stop-cycle") {
+      return Response.json(await runQuickStopCycle());
+    }
+    if (request.method === "POST" && url.pathname === "/history-cycle") return Response.json(await runHistoryCycle(env.DB));
+    if (request.method === "POST" && url.pathname === "/pause-cycle") return Response.json(await runPauseCycle(env.DB));
+    if (request.method === "POST" && url.pathname === "/communication-preferences-cycle") return Response.json(await runCommunicationPreferencesCycle());
+    if (request.method === "POST" && url.pathname === "/new-situation-cycle") return Response.json(await runNewSituationCycle());
+    if (request.method === "POST" && url.pathname === "/simple-analysis-cycle") {
+      return Response.json(await runSimpleAnalysisCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/behavior-chain-cycle") {
+      return Response.json(await runBehaviorChainCycle(env.DB));
+    }
+    if (request.method === "POST" && url.pathname === "/intervention-routing") {
+      return Response.json(await runInterventionRouting());
     }
     if (request.method === "POST" && url.pathname === "/outcome-idempotency") {
       return Response.json(await runOutcomeIdempotency(env.DB));
@@ -1171,4 +1737,136 @@ const worker: ExportedHandler<Env> = {
   },
 };
 
+async function runReleaseSafety(db: D1Database) {
+  const id = `release-safety-${crypto.randomUUID()}`;
+  const user = { userId: id, email: `${id}@example.invalid`, displayName: "Safety", fullName: null };
+  await ensureUser(user);
+  await ensureSkillCatalog();
+  const input = { kind: "stuck", description: "Я хочу убить себя", firstSignal: "thought", actionUrge: "avoid", desiredDirection: "goal", importantGoal: "отчёт", intensity: 5, risk: "no" };
+  const blocked = await recommendSkill(user, input);
+  if (blocked.skill || blocked.safetyStatus !== "escalate") throw new Error("Risk text bypassed legacy recommendation gate");
+  let denied = false;
+  try { await startAttempt(user, { skillId: "micro-start", situationId: blocked.situationId, mode: "help" }); } catch { denied = true; }
+  if (!denied) throw new Error("Escalated situation allowed a practice");
+  denied = false;
+  try { await startAttempt(user, { skillId: "micro-start", mode: "practice" }); } catch { denied = true; }
+  if (!denied) throw new Error("Legacy-only risk hold bypassed by omitting the situation");
+  await db.prepare("DELETE FROM situations WHERE id=? AND user_id=?").bind(blocked.situationId, user.userId).run();
+  denied = false;
+  try { await startAttempt(user, { skillId: "micro-start", mode: "practice" }); } catch { denied = true; }
+  if (!denied) throw new Error("Deleting a situation cleared the safety hold");
+  const other = { ...user, userId: `${id}-other`, email: `${id}-other@example.invalid` };
+  await ensureUser(other);
+  const owner = { ...user, userId: `${id}-owner`, email: `${id}-owner@example.invalid` };
+  const safe = await recommendSkill(owner, { ...input, description: "Откладываю отчёт и читаю новости" });
+  denied = false;
+  try { await startAttempt(other, { skillId: "micro-start", situationId: safe.situationId, mode: "help" }); } catch { denied = true; }
+  if (!denied) throw new Error("Cross-user situation allowed a practice");
+  await ensureTrainerStorage();
+  await db.prepare("INSERT OR REPLACE INTO trainer_profiles (user_id,pseudonym,name,trainer_id,main_problem,consent_version,created_at,last_interaction_at,safety_flag) VALUES (?,?,?,'marsha',?,'release-test',?,?,1)").bind(id, crypto.randomUUID(), "Safety", "отчёт", new Date().toISOString(), new Date().toISOString()).run();
+  const flagged = await recommendSkill(user, { ...input, description: "Откладываю отчёт и читаю новости" });
+  if (flagged.skill || flagged.safetyStatus !== "escalate") throw new Error("Profile safety flag bypassed");
+  denied = false;
+  try { await startAttempt(user, { skillId: "micro-start", mode: "practice" }); } catch { denied = true; }
+  if (!denied) throw new Error("Safety flag bypassed with direct start");
+  const count = await db.prepare("SELECT count(*) AS n FROM skill_attempts WHERE user_id IN (?,?)").bind(id, other.userId).first<{ n: number }>();
+  if (count?.n !== 0) throw new Error("Blocked practice persisted an attempt");
+  return { riskTextBlocked: true, escalatedStartBlocked: true, crossUserStartBlocked: true, profileFlagBlocked: true, attempts: count.n };
+}
+
 export default worker;
+
+async function runReleaseReadiness(db: D1Database) {
+  const suffix = crypto.randomUUID();
+  const quotaId = `quota-${suffix}`;
+  const quotaNow = Date.now();
+  for (let i=0;i<30;i++) await consumeUsage(db, quotaId, "192.0.2.10", quotaNow);
+  let quotaDenied = false;
+  try { await consumeUsage(db, quotaId, "192.0.2.10", quotaNow); } catch { quotaDenied = true; }
+  if (!quotaDenied) throw new Error("Quota did not stop the 31st request");
+  await consumeUsage(db, quotaId, "192.0.2.10", quotaNow+86400000);
+  const concurrent = await Promise.allSettled(Array.from({ length: 31 }, () => consumeUsage(db, `concurrent-${suffix}`, null, quotaNow)));
+  if (concurrent.filter(x => x.status === "fulfilled").length !== 30) throw new Error("Concurrent quota is not atomic");
+  const quotaRows = await db.prepare("SELECT bucket FROM usage_limits").all<{ bucket: string }>();
+  if (JSON.stringify(quotaRows.results).includes(quotaId) || JSON.stringify(quotaRows.results).includes("192.0.2.10")) throw new Error("Quota stores raw identity");
+  const user = { userId: `readiness-${suffix}`, email: `${suffix}@example.invalid`, displayName: "Readiness", fullName: null };
+  const other = { ...user, userId: `${user.userId}-other`, email: `other-${suffix}@example.invalid` };
+  const sessionId = crypto.randomUUID();
+  const command = (raw: Record<string, unknown>, who = user) => trainerCommand(who, { requestId: crypto.randomUUID(), sessionId, ...raw });
+  await command({ action: "onboard", name: "Target", trainerId: "marsha", text: "Откладываю отчёт и читаю новости", consent: true });
+  const otherBefore = await command({ action: "onboard", name: "Keep", trainerId: "beck", text: "Эту запись нельзя удалять", consent: true }, other);
+  // Upgrade-retained memory namespaces must be included in account erasure.
+  for (const who of [user.userId, other.userId]) {
+    await db.prepare("INSERT INTO behavioral_memory_v2 (id,user_id,analysis_id,kind,action_urge,topic,intervention_point,created_at) VALUES (?,?,?,'task','avoid','synthetic','start',?)")
+      .bind(crypto.randomUUID(), who, crypto.randomUUID(), new Date().toISOString()).run();
+    await db.prepare("INSERT INTO intervention_memory_v2 (id,user_id,skill_id,outcome,created_at) VALUES (?,?,'micro-start','done',?)")
+      .bind(crypto.randomUUID(), who, new Date().toISOString()).run();
+  }
+  if (await groupEligibility(db, user.userId)) throw new Error("Offer before completed practice");
+  const planState = await command({ action: "quickStop", text: "Волнуюсь из-за рабочего отчёта", intensity: 6, risk: "no" });
+  const plan = planState.plans[0];
+  await command({ action: "start", planId: plan.id });
+  await command({ action: "performance", planId: plan.id, result: "done" });
+  const outcome = await command({ action: "outcome", planId: plan.id, result: "done", helpfulness: 7, intensity: 4 });
+  const pseudo = outcome.profile!.pseudonym;
+  await command({ action: "feedback", helpfulness: 7, understood: 8, continueIntent: 6, helped: "private-feedback", annoyed: "private" });
+  const parallelLeads = await Promise.all([createGroupRequest(db, user.userId, { contact: "@synthetic_example", consent: true }), createGroupRequest(db, user.userId, { contact: "@synthetic_example", consent: true })]);
+  if (parallelLeads[0].id !== parallelLeads[1].id) throw new Error("Concurrent duplicate lead created");
+  const lead = parallelLeads[0];
+  const duplicate = await createGroupRequest(db, user.userId, { contact: "@different_contact", consent: true });
+  if (lead.id !== duplicate.id) throw new Error("Duplicate lead created");
+  let rejected = false;
+  try { await updateGroupRequest(db, { id: lead.id, status: "confirmed" }); } catch { rejected = true; }
+  if (!rejected) throw new Error("Payment confirmed without verification");
+  await updateGroupRequest(db, { id: lead.id, status: "contacted" });
+  const confirmed = await updateGroupRequest(db, { id: lead.id, status: "confirmed", amountEur: 1, confirmationNote: "synthetic receipt only", paymentVerified: true });
+  if (confirmed.status !== "confirmed") throw new Error("Manual confirmation failed");
+  await command({ action: "message", text: "Я хочу умереть" });
+  if (await groupEligibility(db, user.userId)) throw new Error("Offer visible during safety flow");
+  await consumeUsage(db, user.userId, null);
+  const request = (await requestErasure(db, user.userId))!;
+  if ((await requestErasure(db, user.userId))?.id !== request.id) throw new Error("Erasure request is not idempotent");
+  rejected = false;
+  try { await command({ action: "settings", trainerId: "skinny" }); } catch { rejected = true; }
+  if (!rejected) throw new Error("Writes allowed after erasure request");
+  for (const input of [{ maintenance: false, mirrorsVerified: true }, { maintenance: true, mirrorsVerified: false }, { maintenance: true, mirrorsVerified: true }]) {
+    rejected = false;
+    try { await purgeAccount(db, request.id, input); } catch { rejected = true; }
+    if (!rejected) throw new Error("Purge precondition was ignored");
+  }
+  await db.prepare("UPDATE privacy_requests SET created_at=? WHERE id=?").bind(new Date(Date.now()-120000).toISOString(), request.id).run();
+  await db.prepare("CREATE TABLE erasure_unknown_fixture (user_id TEXT)").run();
+  rejected = false;
+  try { await purgeAccount(db, request.id, { maintenance: true, mirrorsVerified: true }); } catch { rejected = true; }
+  await db.prepare("DROP TABLE erasure_unknown_fixture").run();
+  if (!rejected) throw new Error("Unknown owned table was silently ignored");
+  // FK failure proves the batch rolls back rather than producing partial erasure.
+  await db.prepare("CREATE TABLE erasure_fk_fixture (owner TEXT REFERENCES users(id))").run();
+  await db.prepare("INSERT INTO erasure_fk_fixture (owner) VALUES (?)").bind(user.userId).run();
+  rejected = false;
+  try { await purgeAccount(db, request.id, { maintenance: true, mirrorsVerified: true }); } catch { rejected = true; }
+  if (!rejected || !await db.prepare("SELECT id FROM users WHERE id=?").bind(user.userId).first()) throw new Error("Erasure batch did not roll back");
+  const stillThere = await db.prepare("SELECT id FROM trainer_messages WHERE user_id=?").bind(user.userId).first();
+  if (!stillThere) throw new Error("Rollback lost messages");
+  await db.prepare("DROP TABLE erasure_fk_fixture").run();
+  await purgeAccount(db, request.id, { maintenance: true, mirrorsVerified: true });
+  for (const table of ERASURE_TABLES) {
+    if (!await db.prepare("SELECT name FROM sqlite_master WHERE name=?").bind(table).first()) continue;
+    const count = await db.prepare(`SELECT count(*) AS n FROM "${table}" WHERE user_id IN (?,?)`).bind(user.userId, pseudo).first<{ n: number }>();
+    if (count?.n) throw new Error(`Erasure left ${table}`);
+  }
+  if (await db.prepare("SELECT id FROM users WHERE id=?").bind(user.userId).first()) throw new Error("User identity remains");
+  const receipt = await db.prepare("SELECT user_id,pseudonym,status FROM privacy_requests WHERE id=?").bind(request.id).first<{ user_id: string | null; pseudonym: string | null; status: string }>();
+  if (receipt?.user_id || receipt?.pseudonym || receipt?.status !== "completed") throw new Error("Receipt retains identity");
+  if (await privacyStatus(db, user.userId)) throw new Error("Request retains old identity");
+  const buckets = await userUsageBuckets(user.userId);
+  for (const bucket of buckets) if (await db.prepare("SELECT bucket FROM usage_limits WHERE bucket=?").bind(bucket).first()) throw new Error("User quota identifier remains after erasure");
+  for (const table of ["behavioral_memory_v2", "intervention_memory_v2"]) {
+    const retained = await db.prepare(`SELECT count(*) AS n FROM ${table} WHERE user_id=?`).bind(other.userId).first<{ n: number }>();
+    if (retained?.n !== 1) throw new Error("Upgrade memory of another user changed");
+  }
+  const otherAfter = await trainerState(other);
+  if (JSON.stringify(otherBefore.messages) !== JSON.stringify(otherAfter.messages) || otherAfter.profile?.name !== "Keep") throw new Error("Another account changed");
+  await purgeAccount(db, request.id, { maintenance: true, mirrorsVerified: true });
+  return { erasure: true, aliases: true, rollback: true, unknownTableBlocked: true, otherUserPreserved: true, offerAfterPractice: true, crisisExcluded: true, leadIdempotent: true, manualConfirmation: true };
+}

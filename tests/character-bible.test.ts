@@ -91,6 +91,31 @@ test("reply guard enforces free talk limits: 2–4 sentences, one question, acti
   assert.ok(validateTrainerReply("Понимаю, это сейчас тяжело. Давай выберем один маленький шаг — что из этого по силам?").ok);
 });
 
+
+test("conversation-first instructions prevent the hypothesis loop and fake outcomes", () => {
+  const beck = getCharacterBible("beck");
+  const instructions = buildFreeTalkInstructions(beck, "Давай спокойно разберём");
+
+  assert.match(instructions, /прямой запрос.*что делать сейчас/i);
+  assert.match(instructions, /дай один конкретный выполнимый шаг/i);
+  assert.match(instructions, /Не требуй сначала подтвердить рабочую гипотезу/i);
+  assert.match(instructions, /запрещено говорить.*есть результат/i);
+  assert.match(instructions, /Не копируй длинное сообщение пользователя/i);
+  assert.match(instructions, /гипотеза опциональна/i);
+
+  assert.match(beck.structure, /сначала ответить на явный запрос пользователя/i);
+  assert.ok(
+    beck.allowedMoves.some((move) =>
+      /без обязательного вопроса на подтверждение гипотезы/i.test(move),
+    ),
+  );
+  assert.ok(
+    beck.allowedMoves.some((move) =>
+      /не обсуждать её результат до явного сообщения пользователя/i.test(move),
+    ),
+  );
+});
+
 test("adversarial inputs: safety routing and injections are trainer-independent", () => {
   for (const id of TRAINER_IDS) {
     const bible = getCharacterBible(id);
@@ -123,4 +148,33 @@ test("free talk fallback is deterministic and bible-grounded", () => {
     assert.ok(first.includes(bible.patterns.returnAfterGap));
     assert.match(first, /действие\?$/);
   }
+});
+
+
+test("saved address and gender reach free talk even with orchestration instructions", async () => {
+  const { produceFreeTalkReply } = await import("../lib/free-talk.ts");
+  for (const address of ["formal", "informal"] as const) {
+    for (const gender of ["neutral", "masculine", "feminine"] as const) {
+      let instructions = "";
+      const reply = await produceFreeTalkReply({
+        profile: { trainer_id: "beck", interaction_mode: "support", address_form: address, grammatical_gender: gender },
+        messages: [], apiKey: "test-key", model: "test-model", instructionsOverride: "Контекст разговора",
+        fetchImpl: async (_url, init) => {
+          instructions = JSON.parse(String(init?.body)).instructions;
+          return Response.json({ output: [{ content: [{ type: "output_text", text: JSON.stringify({ reply: "Можно продолжить с текущего места. Что сейчас трудно?" }) }] }] });
+        },
+      });
+      assert.match(instructions, /Контекст разговора/);
+      assert.ok(instructions.includes(address === "formal" ? "«Вы»" : "«ты»"));
+      assert.ok(instructions.includes(gender === "neutral" ? "переформулируй их нейтрально" : gender === "masculine" ? "мужской род" : "женский род"));
+      assert.equal(reply, "Можно продолжить с текущего места. Что сейчас трудно?");
+    }
+  }
+});
+
+test("informal offline fallback preserves the address without assigning gender", async () => {
+  const { produceFreeTalkReply } = await import("../lib/free-talk.ts");
+  const reply = await produceFreeTalkReply({ profile: { trainer_id: "skinny", interaction_mode: "support", address_form: "informal", grammatical_gender: "feminine" }, messages: [], apiKey: "", model: "test" });
+  assert.match(reply, /тебе/);
+  assert.doesNotMatch(reply, /Вы вернулись/);
 });

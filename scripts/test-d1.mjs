@@ -65,13 +65,16 @@ const query = (sql) => {
 
 const requiredTables = [
   "delayed_outcomes",
+  "intervention_memory",
   "onboarding_profiles",
+  "open_loops",
   "outcomes",
   "personal_skill_evidence",
   "psychologist_access",
   "situations",
   "skill_attempts",
   "skills",
+  "success_factors",
   "users",
 ];
 

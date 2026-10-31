@@ -43,8 +43,13 @@ assertTestD1({
 const environment = {
   ...process.env,
   SKILLER_ENV: "test",
+  SKILLER_AI_DISABLED: "1",
   WRANGLER_SEND_METRICS: "false",
   WRANGLER_WRITE_LOGS: "false",
+  // Изоляция от локального .env.local: wrangler грузит его с override:true и перезаписывает
+  // пустой OPENAI_API_KEY из spawn env. Отключаем загрузку dotenv в тестовом worker.
+  CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false",
+  OPENAI_API_KEY: "",
 };
 const baseArgs = [
   "--config",
@@ -203,6 +208,14 @@ try {
 
   await waitForWorker(baseUrl, () => logs, () => worker.exitCode !== null);
 
+  const releaseSafety = await fetch(`${baseUrl}/release-safety`, { method: "POST" });
+  assert.equal(releaseSafety.status, 200, await releaseSafety.clone().text());
+  assert.deepEqual(await releaseSafety.json(), { riskTextBlocked: true, escalatedStartBlocked: true, crossUserStartBlocked: true, profileFlagBlocked: true, attempts: 0 });
+
+  const readiness = await fetch(`${baseUrl}/release-readiness`, { method: "POST" });
+  assert.equal(readiness.status, 200, (await readiness.clone().text()).slice(0,1000));
+  assert.deepEqual(await readiness.json(), { erasure: true, aliases: true, rollback: true, unknownTableBlocked: true, otherUserPreserved: true, offerAfterPractice: true, crisisExcluded: true, leadIdempotent: true, manualConfirmation: true });
+
   const firstTry = await runScenario(baseUrl, "first_try");
   assert.deepEqual(firstTry, {
     prior: null,
@@ -317,7 +330,7 @@ try {
           to_interaction_mode: "direct",
           final_trainer_id: "beck",
           product_version: "frozen-mvp-1.0",
-          character_version: "1.1",
+          character_version: "1.2",
           skill_card_version: null,
         },
       },
@@ -330,7 +343,7 @@ try {
           to_trainer_id: "beck",
           final_interaction_mode: "direct",
           product_version: "frozen-mvp-1.0",
-          character_version: "1.1",
+          character_version: "1.2",
           skill_card_version: null,
         },
       },
@@ -344,7 +357,7 @@ try {
       payload: {
         skill_id: "micro-start",
         product_version: "frozen-mvp-1.0",
-        character_version: "1.1",
+        character_version: "1.2",
         skill_card_version: "1.0",
       },
     },
@@ -353,7 +366,7 @@ try {
       productVersionColumn: "frozen-mvp-1.0",
       payload: {
         product_version: "frozen-mvp-1.0",
-        character_version: "1.1",
+        character_version: "1.2",
         skill_card_version: null,
       },
     },
@@ -384,12 +397,14 @@ try {
   // относящиеся к событиям этого сценария.
   assert.equal(sheetsExport.firstFailed, 0);
   assert.equal(sheetsExport.firstDeadLettered, 0);
-  assert.equal(sheetsExport.myEventRows, 3, "3 события сценария попали в EVENTS");
+  assert.equal(sheetsExport.myEventRows, 4, "4 события сценария попали в EVENTS");
   assert.equal(sheetsExport.noPrivateText, true);
+  assert.equal(sheetsExport.loopEventExported, true, "PATCH 1.1 open_loop_resolved экспортирован");
+  assert.equal(sheetsExport.loopRowHasNoPrivateText, true, "приватный текст не экспортирован из PATCH 1.1 события");
   assert.equal(sheetsExport.myUserRows, 1, "upsert USERS без дублей");
   assert.equal(sheetsExport.dailyHasHeader, true);
   assert.equal(sheetsExport.cohortsHasData, true);
-  assert.deepEqual(sheetsExport.queueAfterFirst, ["sent", "sent", "sent"]);
+  assert.deepEqual(sheetsExport.queueAfterFirst, ["sent", "sent", "sent", "sent"]);
   assert.equal(sheetsExport.secondClaimed, 0, "повторный прогон: очередь пуста");
   assert.equal(
     sheetsExport.eventsAfterSecond,
@@ -403,7 +418,7 @@ try {
     hasRetryAt: true,
   });
   assert.deepEqual(sheetsExport.fourth, { claimed: 1, sent: 1, failed: 0 });
-  assert.equal(sheetsExport.myEventRowsFinal, 4, "retry доставил 4-е событие");
+  assert.equal(sheetsExport.myEventRowsFinal, 5, "retry доставил 5-е событие");
 
   const onboarding = await runEndpoint(baseUrl, "onboarding-flow");
   assert.deepEqual(onboarding, {
@@ -444,7 +459,7 @@ try {
     writtenCount: 8,
     allRegisteredAndComplete: true,
     counterexampleRejected: true,
-    registrySize: 32,
+    registrySize: 51,
   });
 
   const aiFallback = await runEndpoint(baseUrl, "ai-fallback");
@@ -454,6 +469,7 @@ try {
     onHostileIsFallback: true,
     onValidPassThrough: true,
     fallbackMentionsBridge: true,
+    onOrchestratorTimeoutIsFallback: true,
   });
 
   const adjustment = await runEndpoint(baseUrl, "adjustment-cycle");
@@ -467,8 +483,7 @@ try {
   });
 
   const week = await runEndpoint(baseUrl, "week-cycle");
-  assert.deepEqual(week, {
-    day1: { skillId: "micro-start", reasonCode: "first_try", stepCount: 3, durationSeconds: 120 },
+  assert.deepEqual(week, {    day1: { skillId: "micro-start", reasonCode: "first_try", stepCount: 3, durationSeconds: 120 },
     reloadStable: true,
     day2: { day: 2, continuity: true },
     day3: { recapExact: true },
@@ -484,8 +499,121 @@ try {
     noAiEvents: true,
   });
 
+  const relationship = await runEndpoint(baseUrl, "relationship-cycle");
+  assert.deepEqual(relationship, {
+    loopCreatedDone: true,
+    resolvedDone: { status: "resolved", outcome: "done" },
+    doneEvents: {
+      outcome_done: true,
+      success_factor: true,
+      open_loop_resolved: true,
+    },
+    successFactorsStored: 1,
+    interventionPartial: { outcome: "partial", chain_break_point: "Остановился после первого абзаца" },
+    interventionNotDone: { outcome: "not_done", missing_link: "Не открыл документ из-за уведомлений" },
+    interventionRejected: {
+      outcome: "skill_rejected",
+      rejection_reason: "Слишком много шагов и непонятные слова",
+    },
+    rejectedEvent: true,
+    followUp: {
+      shown: true,
+      answered: true,
+      conversation_started: true,
+      shownAt: true,
+      status: "answered",
+    },
+    partialEvents: {
+      outcome_partial: true,
+      chain_started: true,
+      chain_completed: true,
+    },
+    notDoneEvents: {
+      outcome_not_done: true,
+      missing_link_started: true,
+      missing_link_completed: true,
+    },
+  });
+
+  const separateOutcome = await runEndpoint(baseUrl, "separate-outcome-cycle");
+  for (const [key, value] of Object.entries(separateOutcome)) assert.equal(value, true, `Separate outcome: ${key}`);
+
+  const quickStop = await runEndpoint(baseUrl, "quick-stop-cycle");
+  assert.equal(quickStop.safetyBlocked, true);
+  assert.equal(quickStop.cases.length, 4);
+  for (const item of quickStop.cases) {
+    for (const key of ["stop", "noAttemptOnPrepare", "ownSituation", "duplicateSafe", "blocked", "saved", "attempted", "resolved", "rejectionDistinct"]) {
+      assert.equal(item[key], true, `Quick STOP ${item.outcome}: ${key}`);
+    }
+  }
+
+  const historyCycle = await runEndpoint(baseUrl, "history-cycle");
+  for (const [key, value] of Object.entries(historyCycle)) assert.equal(value, true, `History: ${key}`);
+
+  const pauseCycle = await runEndpoint(baseUrl, "pause-cycle");
+  for (const [key, value] of Object.entries(pauseCycle)) assert.equal(value, true, `Pause: ${key}`);
+
+  const preferences = await runEndpoint(baseUrl, "communication-preferences-cycle");
+  assert.ok(Object.values(preferences).every(value => value === true), JSON.stringify(preferences));
+
+  const newSituation = await runEndpoint(baseUrl, "new-situation-cycle");
+  for (const [key, value] of Object.entries(newSituation)) assert.equal(value, true, `New situation: ${key}`);
+
+  const simpleAnalysis = await runEndpoint(baseUrl, "simple-analysis-cycle");
+  assert.deepEqual(simpleAnalysis, {
+    returnCycle: {
+      samePlan: true,
+      sameAction: true,
+      successAnalysisStarted: true,
+      successFactorStored: true,
+      loopResolved: true,
+      followUpCompleted: true,
+      noExtraPlan: true,
+    },
+    noPlanBeforeConfirmation: true,
+    stages: ["clarify", "confirm", "correct", "confirm"],
+    correctedHypothesis: true,
+    completed: true,
+    planCreated: true,
+    openLoopCreated: true,
+    fullPracticeSteps: 3,
+  });
+
+  const behaviorChain = await runEndpoint(baseUrl, "behavior-chain-cycle");
+  assert.deepEqual(behaviorChain, {
+    noPlanDuringChain: true,
+    stages: ["chain_trigger", "chain_thought", "chain_emotion_body", "chain_urge", "chain_action", "chain_consequences", "chain_confirm"],
+    correctionStage: "chain_edit_choose",
+    editStage: "edit_thought",
+    correctedLinkStored: true,
+    secondCorrectionStage: "chain_edit_choose",
+    secondEditStage: "edit_action",
+    secondCorrectedLinkStored: true,
+    summaryComplete: true,
+    choiceStage: "chain_choose",
+    completed: true,
+    planCreated: true,
+    openLoopCreated: true,
+    selectedSkill: "check-facts",
+    fullPracticeSteps: 3,
+    memoryStored: true,
+    memoryShownAsContextCard: true,
+    memoryCardDismissed: true,
+    memoryDraftStage: "chain_confirm",
+    memoryDraftRequiresConfirmation: true,
+  });
+
+  const interventionRouting = await runEndpoint(baseUrl, "intervention-routing");
+  assert.deepEqual(interventionRouting, {
+    thought: "check-facts",
+    body: "grounding-543",
+    urge: "urge-surfing",
+    action: "distract-delay",
+    highIntensity: "stop",
+  });
+
   console.log(
-    "D1 integration passed: seven recommendation branches including avoidance, idempotent repeated outcomes, versioned settings continuity, duplicate request mutation, cohort attribution, export queue, Sheets mirror cycle with failure recovery, onboarding flow, outcome semantics, safety cycle, event completeness, AI fallback, full resize/replace/repeat/transfer adjustment cycle and E2E week Day 1-7.",
+    "D1 integration passed: recommendation branches, persistence, relationship cycle, simple and behavioral-chain analysis, full adjustment cycle and E2E week Day 1-7.",
   );
 } finally {
   if (worker && worker.exitCode === null) worker.kill("SIGTERM");

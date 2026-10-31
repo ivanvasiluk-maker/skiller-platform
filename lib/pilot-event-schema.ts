@@ -26,6 +26,10 @@ export const PILOT_EVENT_SPECS: readonly PilotEventSpec[] = [
   { name: "safety_flow_used", description: "Сработал safety route", requiredPayloadKeys: [] },
   { name: "safety_check_completed", description: "Пользователь подтвердил отсутствие опасности", requiredPayloadKeys: [] },
   { name: "situation_submitted", description: "Ситуация отправлена на разбор", requiredPayloadKeys: [] },
+  { name: "analysis_started", description: "Начат простой разговорный разбор ситуации", requiredPayloadKeys: [] },
+  { name: "analysis_hypothesis_shown", description: "Показана рабочая гипотеза для проверки пользователем", requiredPayloadKeys: [] },
+  { name: "analysis_hypothesis_confirmed", description: "Пользователь подтвердил рабочую гипотезу", requiredPayloadKeys: [] },
+  { name: "analysis_intervention_selected", description: "Пользователь выбрал точку вмешательства в поведенческой цепочке", requiredPayloadKeys: ["intervention_point"] },
   { name: "mechanism_generated", description: "AI выдал разбор поведенческой цепочки", requiredPayloadKeys: [] },
   { name: "skill_recommended", description: "Skill Engine выдал рекомендацию", requiredPayloadKeys: ["skill_id", "decision_reason_code"] },
   { name: "action_started", description: "Пользователь начал микро-действие", requiredPayloadKeys: ["skill_id"] },
@@ -45,6 +49,22 @@ export const PILOT_EVENT_SPECS: readonly PilotEventSpec[] = [
   { name: "feedback_submitted", description: "Отправлен Day 3/7 feedback", requiredPayloadKeys: ["helpfulness", "understood", "continue_intent"] },
   { name: "trainer_changed", description: "Смена тренера без потери прогресса", requiredPayloadKeys: ["from_trainer_id", "to_trainer_id"] },
   { name: "interaction_mode_changed", description: "Смена interaction mode", requiredPayloadKeys: ["from_interaction_mode", "to_interaction_mode"] },
+  // PATCH 1.1 — Conversational Relationship Layer. Существующие события не удаляются.
+  { name: "conversation_started", description: "Разговор начат после onboarding или входа", requiredPayloadKeys: [] },
+  { name: "follow_up_shown", description: "Показан контекстный follow-up по due open loop", requiredPayloadKeys: ["loop_id"] },
+  { name: "follow_up_answered", description: "Пользователь ответил на follow-up", requiredPayloadKeys: ["loop_id"] },
+  { name: "open_loop_created", description: "Сохранена договорённость (open loop)", requiredPayloadKeys: ["loop_id", "entry_mode"] },
+  { name: "open_loop_resolved", description: "Open loop закрыт исходом", requiredPayloadKeys: ["loop_id", "outcome"] },
+  { name: "outcome_done", description: "Исход DONE", requiredPayloadKeys: ["loop_id"] },
+  { name: "outcome_partial", description: "Исход PARTIAL", requiredPayloadKeys: ["loop_id"] },
+  { name: "outcome_not_done", description: "Исход NOT_DONE", requiredPayloadKeys: ["loop_id"] },
+  { name: "skill_rejected", description: "Пользователь отклонил рекомендацию", requiredPayloadKeys: ["loop_id", "skill_id"] },
+  { name: "missing_link_started", description: "Начат Missing Link Analysis", requiredPayloadKeys: ["loop_id"] },
+  { name: "missing_link_completed", description: "Missing Link Analysis завершён", requiredPayloadKeys: ["loop_id"] },
+  { name: "chain_analysis_started", description: "Начат Behavioral Chain Analysis", requiredPayloadKeys: ["loop_id"] },
+  { name: "chain_analysis_completed", description: "Behavioral Chain Analysis завершён", requiredPayloadKeys: ["loop_id"] },
+  { name: "success_factor_identified", description: "Сохранён success factor после DONE", requiredPayloadKeys: ["loop_id"] },
+  { name: "voice_message_sent", description: "Голосовое сообщение транскрибировано и отправлено", requiredPayloadKeys: [] },
 ] as const;
 
 const specByName = new Map(PILOT_EVENT_SPECS.map((spec) => [spec.name, spec]));

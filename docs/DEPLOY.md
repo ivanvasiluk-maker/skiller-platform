@@ -26,9 +26,9 @@ npx wrangler d1 create skiller-d1-prod
 |---|---|
 | `d1_databases[0].database_id` | вывод `wrangler d1 create` |
 | `d1_databases[0].database_name` | `skiller-d1-prod` |
-| `vars.GOOGLE_SHEETS_SPREADSHEET_ID` | ID Google-таблицы-зеркала |
+| `vars.GOOGLE_SHEETS_SPREADSHEET_ID` | Необязательный ID Google-таблицы-зеркала. Без него приложение работает, а `/api/export` возвращает 503. |
 
-Проверка конфига (откажет при плейсхолдерах и при тестовом D1 identity):
+Проверка конфига (откажет при незаполненном/невалидном D1 identity; Sheets ID необязателен):
 
 ```bash
 npm run deploy:check
@@ -51,11 +51,13 @@ npx wrangler secret put EXPORT_CRON_SECRET --config wrangler.production.jsonc
 ## 4. Деплой
 
 ```bash
-npm run deploy
+npm run deploy -- --confirm-production=skiller-platform
 ```
 
 Скрипт: `build` → `d1 migrations apply --remote` → `wrangler deploy`.
-Пауза 5 секунд перед стартом — точка отмены.
+Без явного флага подтверждения скрипт отказывается работать. В CI production deploy запрещён. Флаг передаётся только после подтверждения владельца.
+
+Публичный Worker по умолчанию игнорирует `oai-authenticated-user-*` и использует гостевую cookie. `SKILLER_TRUST_AUTH_HEADERS=1` разрешён только за проверенным шлюзом, который удаляет входящие заголовки и закрывает прямой доступ к Worker. Не включать на публичном workers.dev.
 
 ## 5. Smoke развёрнутой версии
 
