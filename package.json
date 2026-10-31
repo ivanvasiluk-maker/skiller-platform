@@ -26,6 +26,7 @@
     "deploy": "node scripts/deploy.mjs deploy",
     "db:generate": "drizzle-kit generate",
     "test:ui": "node scripts/test-ui.mjs",
+    "test:pilot-ui": "node scripts/test-ui.mjs --pilot",
     "test:http": "node scripts/test-ui.mjs --http",
     "test:recovery": "node scripts/test-d1-recovery.mjs",
     "test:maintenance": "node scripts/test-ui.mjs --maintenance",
