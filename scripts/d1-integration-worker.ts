@@ -1,3 +1,4 @@
+import { listDayTasks, exportDayTasks, dayTaskCommand } from "../lib/day-tasks";
 import { consumeUsage, userUsageBuckets } from "../lib/usage-limits";
 import { ERASURE_TABLES, privacyStatus, requestErasure, purgeAccount } from "../lib/privacy-data";
 import { createGroupRequest, groupEligibility, updateGroupRequest } from "../lib/group-requests";
@@ -1650,6 +1651,7 @@ const worker: ExportedHandler<Env> = {
       const row = await env.DB.prepare("SELECT 1 AS ok").first();
       return Response.json(row);
     }
+    if (request.method === "POST" && url.pathname === "/day-task-cycle") { try { return Response.json(await runDayTaskCycle(env.DB)); } catch (error) { return Response.json({ error: String(error), stack: error instanceof Error ? error.stack : "" }, { status: 500 }); } }
     if (request.method === "POST" && url.pathname === "/release-readiness") { try { return Response.json(await runReleaseReadiness(env.DB)); } catch (error) { return Response.json({ error: String(error), stack: error instanceof Error ? error.stack : "" }, { status: 500 }); } }
     if (request.method === "POST" && url.pathname === "/release-safety") return Response.json(await runReleaseSafety(env.DB));
     if (request.method === "POST" && url.pathname === "/pilot-analytics") {
@@ -1871,4 +1873,55 @@ async function runReleaseReadiness(db: D1Database) {
   if (JSON.stringify(otherBefore.messages) !== JSON.stringify(otherAfter.messages) || otherAfter.profile?.name !== "Keep") throw new Error("Another account changed");
   await purgeAccount(db, request.id, { maintenance: true, mirrorsVerified: true });
   return { erasure: true, aliases: true, rollback: true, unknownTableBlocked: true, otherUserPreserved: true, offerAfterPractice: true, crisisExcluded: true, leadIdempotent: true, manualConfirmation: true };
+}
+
+
+async function runDayTaskCycle(db: D1Database) {
+  const user = `tasks-${crypto.randomUUID()}`, other = `other-${crypto.randomUUID()}`;
+  const date = "2026-10-31", timezone = "Europe/Vilnius";
+  const command = (body: Record<string, unknown>, id = user) => dayTaskCommand(db, id, body);
+  const initial = await command({ action: "add", date, timezone, text: "- Отчёт\nПисьмо\nОТЧЁТ" });
+  const replay = await command({ action: "add", date, timezone, text: "Отчёт\nПисьмо" });
+  let tasks = await listDayTasks(db, user, date);
+  const original = tasks.find(task => task.title === "Отчёт")!;
+  await command({ action: "add", date, timezone, text: "Другое дело" }, other);
+  let isolation = false;
+  try { await command({ action: "delete", id: original.id, version: original.version }, other); } catch { isolation = true; }
+  await command({ action: "focus", id: original.id, version: original.version });
+  tasks = await listDayTasks(db, user, date);
+  const second = tasks.find(task => task.title === "Письмо")!;
+  await command({ action: "focus", id: second.id, version: second.version });
+  const focused = await listDayTasks(db, user, date);
+  let stale = false;
+  try { await command({ action: "focus", id: original.id, version: original.version }); } catch { stale = true; }
+  const afterStale = await listDayTasks(db, user, date);
+  const partial = afterStale.find(task => task.id === original.id)!;
+  await command({ action: "update", id: partial.id, version: partial.version, date, timezone, title: "Отчёт", status: "partial" });
+  const updated = (await listDayTasks(db, user, date)).find(task => task.id === original.id)!;
+  await command({ action: "update", id: updated.id, version: updated.version, date: "2026-11-01", timezone, title: "Отчёт", status: "partial" });
+  const moved = await listDayTasks(db, user, "2026-11-01");
+  const remaining = await listDayTasks(db, user, date);
+  let invalidDate = false, invalidZone = false, conflict = false;
+  try { await command({ action: "add", date: "2026-02-30", timezone, text: "Invalid" }); } catch { invalidDate = true; }
+  try { await command({ action: "add", date, timezone: "No/Such_Zone", text: "Invalid" }); } catch { invalidZone = true; }
+  await command({ action: "add", date, timezone, text: "Отчёт" });
+  try { await command({ action: "update", id: moved[0].id, version: moved[0].version, date, timezone, title: "Отчёт", status: "partial" }); } catch { conflict = true; }
+  const beforePurge = await exportDayTasks(db, user);
+  const request = await requestErasure(db, user);
+  let deletionBlocked = false, maintenanceBlocked = false;
+  try { await command({ action: "add", date, timezone, text: "Forbidden" }); } catch { deletionBlocked = true; }
+  try { await dayTaskCommand(db, other, { action: "add", date, timezone, text: "Forbidden" }, true); } catch { maintenanceBlocked = true; }
+  await db.prepare("UPDATE privacy_requests SET created_at=? WHERE id=?").bind("2026-01-01T00:00:00Z", request!.id).run();
+  await purgeAccount(db, request!.id, { maintenance: true, mirrorsVerified: true });
+  return {
+    importDeduplicated: "added" in initial && initial.added === 2 && "added" in replay && replay.added === 0,
+    isolation,
+    oneFocus: focused.filter(task => task.is_focus).length === 1 && focused.find(task => task.is_focus)?.id === second.id,
+    staleDoesNotClearFocus: stale && JSON.stringify(focused) === JSON.stringify(afterStale),
+    movedWithoutCopy: moved.length === 1 && moved[0].id === original.id && moved[0].status === "partial" && remaining.length === 1,
+    invalidDate, invalidZone, collisionBlocked: conflict,
+    exportOwned: beforePurge.length === 3 && !(await exportDayTasks(db, other)).some(task => beforePurge.some(own => own.id === task.id)),
+    deletionBlocked, maintenanceBlocked,
+    erasure: (await exportDayTasks(db, user)).length === 0 && (await exportDayTasks(db, other)).length === 1,
+  };
 }

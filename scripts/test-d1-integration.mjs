@@ -535,6 +535,9 @@ try {
     },
   });
 
+  const dayTasks = await runEndpoint(baseUrl, "day-task-cycle");
+  for (const [key, value] of Object.entries(dayTasks)) assert.equal(value, true, `Day tasks: ${key}`);
+
   const separateOutcome = await runEndpoint(baseUrl, "separate-outcome-cycle");
   for (const [key, value] of Object.entries(separateOutcome)) assert.equal(value, true, `Separate outcome: ${key}`);
 
