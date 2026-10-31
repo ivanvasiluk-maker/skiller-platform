@@ -15,6 +15,7 @@ for (const [path, body] of [
   ['/api/skiller', { action: 'recommend', description: 'Synthetic task', risk: 'no' }],
   ['/api/group-requests', { contact: '@synthetic_maintenance', consent: true }],
   ['/api/export', {}],
+  ['/api/day-tasks', { action: 'add', date: '2026-10-31', timezone: 'Europe/Vilnius', text: 'Forbidden task' }],
 ]) {
   const response = await send(path, { method: 'POST', headers: { cookie, 'content-type': 'application/json' }, body: JSON.stringify(body) });
   assert.equal(response.status, 503, `${path} must be paused during maintenance`);

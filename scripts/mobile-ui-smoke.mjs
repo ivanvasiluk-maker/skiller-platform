@@ -78,6 +78,33 @@ try {
     assert.ok(mic && mic.width >= 44 && mic.height >= 44, 'Microphone touch target too small');
     assert.equal(await page.locator('.trainer-conversation-title img').getAttribute('alt'), trainerName);
     await page.screenshot({ path: `test-results/mobile-ui/conversation-${width}.png`, fullPage: true });
+    // A personal day plan survives reload without duplicate imports or automatic trainer submission.
+    await page.getByRole('button', { name: 'Практики', exact: true }).click();
+    const dayPlan = page.getByRole('region', { name: 'Дела на день', exact: true });
+    const dayTitle = `Отчёт ${width}`;
+    await dayPlan.getByLabel('Список дел').fill(`${dayTitle}\nПисьмо ${width}\n${dayTitle}`);
+    await dayPlan.getByRole('button', { name: 'Добавить дела', exact: true }).click();
+    await dayPlan.getByRole('status').filter({ hasText: 'Добавлено: 2' }).waitFor();
+    let taskRow = dayPlan.getByRole('article', { name: `Дело: ${dayTitle}`, exact: true });
+    await taskRow.getByRole('button', { name: 'Выбрать для старта', exact: true }).click();
+    await taskRow.getByRole('button', { name: 'Выбрано для старта', exact: true }).waitFor();
+    await taskRow.getByRole('button', { name: 'Начал, но не закончил', exact: true }).click();
+    await taskRow.getByText('Начато, но не закончено · Одно дело для старта', { exact: true }).waitFor();
+    await page.reload();
+    await page.getByRole('button', { name: 'Практики', exact: true }).click();
+    taskRow = dayPlan.getByRole('article', { name: `Дело: ${dayTitle}`, exact: true });
+    await taskRow.getByText('Начато, но не закончено · Одно дело для старта', { exact: true }).waitFor();
+    assert.equal(await dayPlan.getByRole('article').count(), 2);
+    await taskRow.getByRole('checkbox').check();
+    await taskRow.getByText('Сделано', { exact: true }).waitFor();
+    const otherTask = dayPlan.getByRole('article', { name: `Дело: Письмо ${width}`, exact: true });
+    await page.screenshot({ path: `test-results/mobile-ui/day-tasks-${width}.png`, fullPage: true });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'Day plan must fit mobile');
+    await otherTask.getByRole('button', { name: 'Помоги начать', exact: true }).click();
+    await input.waitFor();
+    assert.match(await input.inputValue(), new RegExp(`Хочу начать дело: Письмо ${width}`));
+    assert.equal(sent, 0, 'Task handoff must not submit or invent an attempt');
+
     await page.getByRole('button', { name: 'Записать голосом', exact: true }).click();
     await page.getByText('Доступ к микрофону не получен. Можно продолжить текстом.', { exact: true }).waitFor();
     // Complete a real practice through the UI, then submit the agreed group offer.

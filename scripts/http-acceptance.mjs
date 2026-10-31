@@ -14,7 +14,7 @@ const spoof = await send('/api/trainer', { headers: { 'oai-authenticated-user-id
 assert.equal(spoof.status, 401, 'Public worker must ignore forged user headers');
 const malformed = await send('/api/trainer', { headers: { cookie: '__Host-skiller_guest=%ZZ' } });
 assert.equal(malformed.status, 401);
-for (const path of ['/api/skiller', '/api/privacy', '/api/group-requests']) {
+for (const path of ['/api/skiller', '/api/privacy', '/api/group-requests', '/api/day-tasks']) {
   assert.equal((await send(path, { method: path === '/api/skiller' ? 'POST' : 'GET', headers: { 'oai-authenticated-user-id': 'victim', 'oai-authenticated-user-email': 'victim@example.invalid' } })).status, 401,
     `${path} must reject forged identity without a session`);
 }
@@ -103,6 +103,29 @@ await command({ action: 'open' });
 await command({ action: 'safeAgain', risk: 'no' });
 const resumed = await (await post('/api/skiller', { action: 'recommend', description: 'Откладываю отчёт и читаю новости', risk: 'no', kind: 'stuck' })).json();
 assert.ok(resumed.skill, 'Explicit reassessment clears the cross-API safety hold');
+// Day tasks use the same signed session, server boundaries and erasure freeze.
+const taskBody = { action: 'add', date: '2026-10-31', timezone: 'Europe/Vilnius', text: 'Отчёт\nПисьмо\nотчёт' };
+assert.equal((await post('/api/day-tasks', taskBody, cookie, { origin: 'https://wrong.invalid' })).status, 403);
+assert.equal((await post('/api/day-tasks', { ...taskBody, date: '2026-02-30' })).status, 400);
+const taskAdded = await post('/api/day-tasks', taskBody);
+assert.equal(taskAdded.status, 200);
+assert.equal((await taskAdded.json()).added, 2);
+assert.equal((await (await post('/api/day-tasks', taskBody)).json()).added, 0);
+const tasksResponse = await send('/api/day-tasks?date=2026-10-31', { headers: { cookie } });
+assert.equal(tasksResponse.headers.get('cache-control'), 'no-store');
+const ownTasks = await tasksResponse.json();
+assert.equal(ownTasks.length, 2);
+assert.deepEqual(await (await send('/api/day-tasks?date=2026-10-31', { headers: { cookie: second } })).json(), []);
+assert.equal((await post('/api/day-tasks', { action: 'delete', id: ownTasks[0].id, version: ownTasks[0].version }, second)).status, 404);
+const updatedTask = { action: 'update', id: ownTasks[0].id, version: ownTasks[0].version, date: '2026-11-01', timezone: 'Europe/Vilnius', title: ownTasks[0].title, status: 'partial' };
+assert.equal((await post('/api/day-tasks', updatedTask)).status, 200);
+assert.equal((await post('/api/day-tasks', updatedTask)).status, 409, 'Stale retries cannot overwrite newer state');
+const movedTasks = await (await send('/api/day-tasks?date=2026-11-01', { headers: { cookie } })).json();
+assert.equal(movedTasks[0].id, ownTasks[0].id);
+assert.equal(movedTasks[0].status, 'partial');
+const taskExport = await send('/api/day-tasks?export=1', { headers: { cookie } });
+assert.equal((await taskExport.json()).length, 2);
+
 const privateCookie = cookie;
 const privacy = await post('/api/privacy', { confirmation: 'УДАЛИТЬ' });
 assert.equal(privacy.status, 202);
@@ -111,6 +134,7 @@ assert.equal(receipt.request.status, 'requested');
 const otherPrivacy = await (await send('/api/privacy', { headers: { cookie: second } })).json();
 assert.equal(otherPrivacy.request, null, 'Erasure status is scoped to the authenticated account');
 assert.equal((await post('/api/trainer', { requestId: crypto.randomUUID(), sessionId, action: 'open' }, privateCookie)).status, 409);
+assert.equal((await post('/api/day-tasks', taskBody)).status, 409, 'Erasure request freezes task writes');
 const blockedPurge = await send('/api/privacy/admin', { method: 'POST', headers: { authorization: 'Bearer local-synthetic-privacy-owner', 'content-type': 'application/json' }, body: JSON.stringify({ id: receipt.request.id, confirmation: 'PURGE_VERIFIED', mirrorsVerified: true }) });
 assert.equal(blockedPurge.status, 409, 'Purge is forbidden outside maintenance');
 assert.equal((await send('/api/trainer', { headers: { cookie: second } })).status, 200, 'Other account remains usable');
