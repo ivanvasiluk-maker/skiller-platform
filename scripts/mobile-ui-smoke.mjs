@@ -64,6 +64,7 @@ try {
     assert.equal(overflow, false, `Horizontal overflow at ${width}px`);
     const mic = await page.getByRole('button', { name: 'Записать голосом', exact: true }).boundingBox();
     assert.ok(mic && mic.width >= 44 && mic.height >= 44, 'Microphone touch target too small');
+    assert.equal(await page.locator('.trainer-conversation-title img').getAttribute('alt'), trainerName);
     await page.screenshot({ path: `test-results/mobile-ui/conversation-${width}.png`, fullPage: true });
     await page.getByRole('button', { name: 'Записать голосом', exact: true }).click();
     await page.getByText('Доступ к микрофону не получен. Можно продолжить текстом.', { exact: true }).waitFor();
