@@ -114,6 +114,13 @@ function outcomeLabel(result: NonNullable<ContinuityPlan["result"]>) {
   return "не получилось";
 }
 
+function benefitLabel(plan: ContinuityPlan) {
+  if (plan.worsened) return "после практики стало хуже";
+  return plan.helpfulness === null
+    ? "полезность не оценена"
+    : `полезность — ${plan.helpfulness}/10`;
+}
+
 const decisionReasonExplanations: Record<OutcomeReasonCode, string> = {
   [OUTCOME_REASON_CODES.repeatHelpful]:
     "Сохранённое решение предлагает ещё раз проверить этот навык в похожей ситуации.",
@@ -150,8 +157,7 @@ function buildDay2CheckIn(
     };
   }
 
-  const score =
-    plan.helpfulness === null ? "" : `, полезность — ${plan.helpfulness}/10`;
+  const score = plan.helpfulness === null && !plan.worsened ? "" : `, ${benefitLabel(plan)}`;
   return {
     planId: plan.id,
     skillTitle: plan.skill_title,
@@ -161,7 +167,7 @@ function buildDay2CheckIn(
       plan.result === "failed"
         ? `Вчера по действию «${plan.skill_title}» Вы отметили: ${outcomeLabel(plan.result)}${score}. Что помешало по факту?`
         : `Вчера по действию «${plan.skill_title}» Вы отметили: ${outcomeLabel(plan.result)}${score}. Что изменилось после этого шага по факту?`,
-    actionLabel:
+    actionLabel: plan.worsened ? "Разобрать ухудшение" :
       plan.result === "failed" ? "Разобрать и изменить шаг" : "Ответить тренеру",
   };
 }
@@ -182,12 +188,10 @@ function buildDays4to6(
   const current = plans[0] ?? null;
   if (!current || current.result === null) return null;
 
-  const decision = current.decision_reason_code;
+  // An explicit adverse response takes precedence over an older recommendation.
+  const decision = current.worsened ? OUTCOME_REASON_CODES.replaceLowFit : current.decision_reason_code;
 
-  const score =
-    current.helpfulness === null
-      ? "полезность не оценена"
-      : `полезность — ${current.helpfulness}/10`;
+  const score = benefitLabel(current);
   const savedFact = `Последний сохранённый результат для «${current.skill_title}»: ${outcomeLabel(current.result)}, ${score}.`;
   const base = {
     planId: current.id,
@@ -297,7 +301,9 @@ function buildGapReturn(
 
   if (openLoop) {
     const next =
-      openLoop.kind === "failed"
+      current?.worsened
+        ? "Выполнение сохранено отдельно: после практики стало хуже. Автоматически повторять этот навык не будем; сначала разберём, что произошло."
+        : openLoop.kind === "failed"
         ? "Сохранённый результат остаётся на месте: можно уменьшить шаг или выбрать другой навык."
         : current?.reported_result ? "Ответ о выполнении сохранён. Можно вернуться к оценке пользы без повторения практики." : `Сохранённое действие «${openLoop.skillTitle}» всё ещё ждёт фактического результата.`;
     return {
@@ -312,10 +318,7 @@ function buildGapReturn(
   }
 
   if (current?.result) {
-    const score =
-      current.helpfulness === null
-        ? "полезность не оценена"
-        : `полезность — ${current.helpfulness}/10`;
+    const score = benefitLabel(current);
     return {
       ...base,
       safetyBlocked: false,
@@ -340,7 +343,16 @@ export function buildTrainerContinuity(
   const outcome = plans.find((plan) => plan.result !== null) ?? null;
   let openLoop: TrainerContinuity["openLoop"] = null;
 
-  if (current?.result === "failed") {
+  if (current?.result && current.worsened) {
+    openLoop = {
+      planId: current.id,
+      skillTitle: current.skill_title,
+      entryMode: current.entry_mode,
+      kind: "failed",
+      prompt: "Выполнение сохранено отдельно: после практики стало хуже. Не будем автоматически повторять этот навык. Сначала разберём, что произошло, и проверим безопасную альтернативу.",
+      actionLabel: "Разобрать ухудшение",
+    };
+  } else if (current?.result === "failed") {
     openLoop = {
       planId: current.id,
       skillTitle: current.skill_title,
@@ -377,7 +389,7 @@ export function buildTrainerContinuity(
       ? {
           planId: outcome.id,
           result: outcome.result,
-          helpfulness: outcome.helpfulness,
+          helpfulness: outcome.worsened ? null : outcome.helpfulness,
           createdAt: outcome.created_at,
         }
       : null,

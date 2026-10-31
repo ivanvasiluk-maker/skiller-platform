@@ -356,3 +356,49 @@ test("gap return copy contains no blame or catch-up demand", () => {
     /виноват|ленив|надо было|почему не|обязан|наверстать/i,
   );
 });
+
+
+test("adverse response preserves completion without exposing the storage sentinel as a rating", () => {
+  for (const result of ["done", "partial", "failed", "more"] as const) {
+    const saved = plan({ result, helpfulness: 0, worsened: 1, attempt_id: "attempt-1" });
+    const state = buildTrainerContinuity([saved], { day: 2, startedAt });
+    assert.equal(state.lastOutcome?.result, result);
+    assert.equal(state.lastOutcome?.helpfulness, null);
+    assert.match(state.day2CheckIn?.prompt ?? "", /стало хуже/);
+    assert.doesNotMatch(state.day2CheckIn?.prompt ?? "", /0\/10/);
+    assert.equal(state.day2CheckIn?.actionLabel, "Разобрать ухудшение");
+    assert.equal(state.openLoop?.actionLabel, "Разобрать ухудшение");
+    assert.equal(saved.helpfulness, 0);
+  }
+});
+
+test("worsening overrides stale repeat, transfer and resize recommendations", () => {
+  for (const decision_reason_code of ["repeat_helpful", "transfer_helpful", "resize_after_failed"] as const) {
+    const state = buildTrainerContinuity([
+      plan({ result: "done", helpfulness: 8, worsened: 1, decision_reason_code }),
+    ], { day: 4, startedAt, safetyAllowsPractice: true });
+    assert.equal(state.days4to6?.kind, "replace");
+    assert.equal(state.days4to6?.reasonCode, "replace_low_fit");
+    assert.match(state.days4to6?.prompt ?? "", /стало хуже/);
+    assert.doesNotMatch(state.days4to6?.prompt ?? "", /8\/10/);
+  }
+});
+
+test("return after a gap keeps adverse response visible and safety still takes priority", () => {
+  const plans = [plan({ result: "done", helpfulness: 0, worsened: 1 })];
+  const context = { day: 5, engagedDays: [1], safetyAllowsPractice: true };
+  const state = buildTrainerContinuity(plans, context);
+  assert.match(state.gapReturn?.prompt ?? "", /стало хуже/);
+  assert.doesNotMatch(state.gapReturn?.prompt ?? "", /0\/10|уменьшить шаг/);
+  assert.equal(state.gapReturn?.actionLabel, "Разобрать ухудшение");
+  const blocked = buildTrainerContinuity(plans, { ...context, safetyAllowsPractice: false });
+  assert.equal(blocked.gapReturn?.actionLabel, "Проверить безопасность");
+  assert.equal(blocked.days4to6, null);
+});
+
+test("an explicit numeric zero remains a rating when no adverse flag was recorded", () => {
+  const state = buildTrainerContinuity([plan({ result: "done", helpfulness: 0, worsened: 0 })], { day: 2, startedAt });
+  assert.equal(state.lastOutcome?.helpfulness, 0);
+  assert.match(state.day2CheckIn?.prompt ?? "", /0\/10/);
+  assert.equal(state.openLoop, null);
+});

@@ -1210,6 +1210,8 @@ async function runSeparateOutcomeCycle(db: D1Database) {
     benefitUnknown: reopened.plans[0].helpfulness === null && beforeBenefit?.count === 0,
     contradictionBlocked,
     worseningStored: worsened.plans[0].worsened === 1 && outcome?.note === "benefit:worsened",
+    adverseReturnPreservesPerformance: worsened.continuity.lastOutcome?.result === "partial" && worsened.continuity.lastOutcome.helpfulness === null,
+    adverseReturnOffersReview: worsened.continuity.openLoop?.actionLabel === "Разобрать ухудшение" && !worsened.continuity.openLoop.prompt.includes("0/10"),
     noFullCompletion: outcome?.completed === 0,
     noSuccessFollowUp: worsened.pendingFollowUp?.kind === "worsened",
     explanationSaved: afterExplanation.pendingFollowUp === null,
