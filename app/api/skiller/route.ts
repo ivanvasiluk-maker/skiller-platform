@@ -1,5 +1,10 @@
+import { consumeUsage } from "@/lib/usage-limits";
+import { env } from "cloudflare:workers";
+import { getRawDb } from "@/db";
+import { assertDataWritable } from "@/lib/privacy-data";
+import { boundedRequest, boundaryResponse } from "@/lib/request-boundary";
 import { getChatGPTUser } from "@/app/chatgpt-auth";
-import { draftOnboardingGoal, OpenAIRequestError, transcribeAudio } from "@/lib/situation-analysis";
+import { draftOnboardingGoal, transcribeAudio } from "@/lib/situation-analysis";
 import { completeAttempt, completeDelayedCheckIn, completeOnboarding, confirmSituationChain, deleteSituation, recommendSkill, startAttempt, updateAccess } from "@/lib/skiller-data";
 
 export const dynamic = "force-dynamic";
@@ -7,23 +12,23 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "Требуется вход" }, { status: 401 });
-  // Тот же контур защиты, что в trainer route: origin и верхний предел тела.
-  if (request.headers.get("origin") && new URL(request.headers.get("origin")!).origin !== new URL(request.url).origin) return Response.json({ error: "Недопустимый источник" }, { status: 403 });
-  if (Number(request.headers.get("content-length") ?? 0) > 5_000_000) return Response.json({ error: "Слишком большой запрос" }, { status: 413 });
-
   try {
+    request = await boundedRequest(request, 5_000_000);
+    await assertDataWritable(getRawDb(), user.userId, (env as unknown as { SKILLER_MAINTENANCE?: string }).SKILLER_MAINTENANCE === "1");
     const contentType = request.headers.get("content-type") ?? "";
     if (contentType.includes("multipart/form-data")) {
       const form = await request.formData();
       if (String(form.get("action") ?? "") === "transcribe") {
         const file = form.get("audio");
         if (!(file instanceof File)) return Response.json({ error: "Добавьте аудиозапись" }, { status: 400 });
+        await consumeUsage(getRawDb(), user.userId, request.headers.get("cf-connecting-ip"));
         return Response.json(await transcribeAudio(file));
       }
       return Response.json({ error: "Неизвестное действие" }, { status: 400 });
     }
 
     const body = (await request.json()) as Record<string, unknown>;
+    if (["onboardingDraft", "recommend"].includes(String(body.action))) await consumeUsage(getRawDb(), user.userId, request.headers.get("cf-connecting-ip"));
     if (body.action === "onboardingDraft") {
       return Response.json({ draft: await draftOnboardingGoal(String(body.story ?? "")) });
     }
@@ -95,11 +100,6 @@ export async function POST(request: Request) {
     }
     return Response.json({ error: "Неизвестное действие" }, { status: 400 });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Не удалось сохранить данные";
-    if (error instanceof OpenAIRequestError) {
-      return Response.json({ error: message, openai: { status: error.status, code: error.code } }, { status: error.status ?? 502 });
-    }
-    console.error("SKILLER API error", error);
-    return Response.json({ error: message }, { status: 500 });
+    return boundaryResponse(error);
   }
 }

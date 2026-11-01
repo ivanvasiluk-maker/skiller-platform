@@ -1,0 +1,5 @@
+CREATE TABLE IF NOT EXISTS safety_holds (
+  user_id TEXT PRIMARY KEY,
+  active INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
+);

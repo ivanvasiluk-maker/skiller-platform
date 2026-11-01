@@ -6,6 +6,7 @@
 //   1. npm run deploy:check  — проверить, что конфиг заполнен
 //   2. npm run deploy        — build + migrations + deploy
 
+import { assertReleaseFile } from "./release-evidence.mjs";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -17,6 +18,7 @@ const wranglerPath = path.join(projectRoot, "node_modules", "wrangler", "bin", "
 
 const TEST_DATABASE_ID = "00000000-0000-4000-8000-000000000041";
 const TEST_DATABASE_NAME = "skiller-d1-test";
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function readConfig() {
   const raw = readFileSync(configPath, "utf8");
@@ -33,9 +35,6 @@ export function assertProductionConfig() {
   const placeholders = [];
   if (!db.database_id || db.database_id.startsWith("REPLACE_WITH")) placeholders.push("database_id");
   if (!db.database_name || db.database_name.startsWith("REPLACE_WITH")) placeholders.push("database_name");
-  const spreadsheet = config.vars?.GOOGLE_SHEETS_SPREADSHEET_ID ?? "";
-  if (spreadsheet.startsWith("REPLACE_WITH")) placeholders.push("GOOGLE_SHEETS_SPREADSHEET_ID");
-
   if (placeholders.length) {
     throw new Error(
       `wrangler.production.jsonc не заполнен: ${placeholders.join(", ")}. ` +
@@ -48,18 +47,23 @@ export function assertProductionConfig() {
       "Production и test D1 должны быть физически разделены.",
     );
   }
+  if (!UUID_PATTERN.test(db.database_id)) {
+    throw new Error("wrangler.production.jsonc: database_id должен быть корректным UUID D1.");
+  }
   if (config.name === "site-creator-vinext-starter") {
     throw new Error("wrangler.production.jsonc: задайте production имя worker'а (name).");
   }
   return { database: db, config };
 }
 
-const subcommand = process.argv[2] ?? "deploy";
+const subcommand = process.argv[2] ?? "check";
 
 if (subcommand === "check") {
-  const { database } = assertProductionConfig();
+  const { database, config } = assertProductionConfig();
+  const sheetsConfigured = Boolean(config.vars?.GOOGLE_SHEETS_SPREADSHEET_ID);
   console.log(
     `Production config OK: worker + D1 '${database.database_name}' (${database.database_id}). ` +
+    `Google Sheets export: ${sheetsConfigured ? "configured" : "disabled (optional)"}. ` +
     "Секреты задаются через wrangler secret put (см. docs/DEPLOY.md).",
   );
   process.exit(0);
@@ -69,6 +73,11 @@ if (subcommand !== "deploy") {
   throw new Error(`Unknown subcommand '${subcommand}'. Use 'check' or 'deploy'.`);
 }
 
+if (process.env.CI || !process.argv.includes("--confirm-production=skiller-platform")) {
+  throw new Error("Production deploy refused: run manually with --confirm-production=skiller-platform after owner approval; CI is forbidden.");
+}
+const evidenceFile = process.argv.find(arg => arg.startsWith("--release-evidence="))?.slice("--release-evidence=".length);
+const acceptedCandidate = assertReleaseFile(evidenceFile, projectRoot);
 const { database } = assertProductionConfig();
 const run = (args, label) => {
   console.log(`\n=== ${label} ===`);
@@ -80,10 +89,11 @@ const run = (args, label) => {
 };
 
 console.log("Deploying to production D1:", database.database_name, database.database_id);
-console.log("Это изменит ПРОДАКШЕН. Прерветесь — Ctrl+C. Пауза 5 секунд...");
-await new Promise((resolve) => setTimeout(resolve, 5000));
+console.log("Accepted release commit:", acceptedCandidate.commitSha);
 
 run(["node_modules/vinext/dist/cli.js", "build"], "build production bundle");
+// Build tooling must not silently alter the reviewed tracked/untracked source.
+assertReleaseFile(evidenceFile, projectRoot);
 run([wranglerPath, "d1", "migrations", "apply", database.database_name, "--remote", "--config", configPath], "apply D1 migrations (remote)");
 run([wranglerPath, "deploy", "--config", configPath], "deploy worker");
 
