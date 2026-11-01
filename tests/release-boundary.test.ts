@@ -35,3 +35,22 @@ test('explicit death wishes stop practice even if the form says no risk', () => 
   for (const text of ['Я хочу умереть', 'Мне хочется умереть', 'I want to die', 'I will end my life', 'Не хачу жыць']) assert.equal(requiresSafetyRoute(text, 'no'), true, text);
   assert.equal(requiresSafetyRoute('Откладываю отчёт и читаю новости', 'no'), false);
 });
+
+
+test('explicit uncertainty about staying safe stops practice without requiring a death keyword', () => {
+  for (const text of [
+    "Не уверен, что могу сейчас оставаться в безопасности",
+    "Не уверена, что смогу быть в безопасности",
+    "Не знаю, смогу ли оставаться в безопасности",
+    "I am not sure I can stay safe",
+  ]) assert.equal(requiresSafetyRoute(text, "no"), true, text);
+  for (const text of ["Я уверен, что могу оставаться в безопасности", "Не уверен, что могу закончить отчёт", "Хочу безопасно отправить отчёт"]) assert.equal(requiresSafetyRoute(text, "no"), false, text);
+});
+
+
+test('combined activation/defensive risk statements pause practice without diagnosing ordinary stress', () => {
+  assert.equal(requiresSafetyRoute("Уже три ночи почти не сплю, ощущаю всемогущество, собираюсь всё вложить в проект", "no"), true);
+  assert.equal(requiresSafetyRoute("Кажется, за мной следят, и я должен срочно защищаться", "no"), true);
+  assert.equal(requiresSafetyRoute("Три ночи плохо сплю из-за отчёта", "no"), false);
+  assert.equal(requiresSafetyRoute("Кажется, за мной следят. Хочу спокойно обсудить, откуда эта мысль", "no"), false);
+});

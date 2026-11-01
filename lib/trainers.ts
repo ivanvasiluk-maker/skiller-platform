@@ -1,7 +1,7 @@
 import { systemPrompt, type CommunicationPreferences } from "./communication-preferences.ts";
 export const PRODUCT_VERSION = "frozen-mvp-1.0";
 // Версия поведения персонажей = версия Character Bible (lib/character-bible.ts).
-export const CHARACTER_VERSION = "1.2";
+export const CHARACTER_VERSION = "1.3";
 export const trainers = {
   marsha: {
     name: "Марша", withName: "с Маршей", initial: "М", color: "#31796a", background: "#e7f1eb", symbol: "◡",
@@ -48,7 +48,11 @@ export function dayIndex(start: string, now = new Date()) {
 
 // Conservative routing, not a clinical risk assessment. Explicit uncertainty also stops skills.
 export function requiresSafetyRoute(text: string, risk: string = "no") {
-  return risk !== "no" || /хочу умереть|хочется умереть|want to die|end my life|kill myself|забіць сябе|не хачу жыць|суицид|самоубий|покончить с собой|убить себя|убью себя|не хочу жить|самоповреж|порезать себя|причинить (?:себе|кому-то) вред|убью (?:его|её|тебя)|передоз|suicid|kill myself|self.harm|overdose/i.test(text);
+  const uncertainSafety = /(?:не уверен(?:а)?|не знаю)[^.?!\n]{0,60}(?:могу|смогу)[^.?!\n]{0,30}(?:оставаться|быть)[^.?!\n]{0,20}в безопасности|(?:not sure|do not know|don't know)[^.?!\n]{0,50}(?:can|could)[^.?!\n]{0,25}(?:stay|remain|be) safe/i;
+  // Conservative escalation on combined high-risk statements, not a diagnosis or general sleep detector.
+  const activationConcern = /(?:три|несколько|[3-9])\s+ноч[^.?!\n]{0,45}не сплю/i.test(text) && /всемогущ/i.test(text);
+  const defensiveConcern = /за мной следят/i.test(text) && /(?:срочно|немедленно)[^.?!\n]{0,25}защищаться/i.test(text);
+  return risk !== "no" || uncertainSafety.test(text) || activationConcern || defensiveConcern || /хочу умереть|хочется умереть|want to die|end my life|kill myself|забіць сябе|не хачу жыць|суицид|самоубий|покончить с собой|убить себя|убью себя|не хочу жить|самоповреж|порезать себя|причинить (?:себе|кому-то) вред|убью (?:его|её|тебя)|передоз|suicid|kill myself|self.harm|overdose/i.test(text);
 }
 
 export const safetyMessage = "Сейчас важнее живая помощь. Если есть непосредственная опасность, свяжитесь с местной экстренной службой или попросите человека рядом помочь это сделать. По возможности останьтесь рядом с человеком, которому доверяете, и отойдите от того, чем можно причинить вред. SKILLER не является экстренной службой. Автоматическую практику сейчас остановим.";

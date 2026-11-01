@@ -145,7 +145,8 @@ test("free talk fallback is deterministic and bible-grounded", () => {
     const first = buildFreeTalkFallback(bible);
     const second = buildFreeTalkFallback(bible);
     assert.equal(first, second, "fallback must be deterministic");
-    assert.ok(first.includes(bible.patterns.returnAfterGap));
+    assert.doesNotMatch(first, /Вы вернулись|наблюдения сохранены|результат|прогресс|Вы уже/i);
+    assert.equal(validateTrainerReply(first).ok, true);
     assert.match(first, /действие\?$/);
   }
 });
@@ -177,4 +178,10 @@ test("informal offline fallback preserves the address without assigning gender",
   const reply = await produceFreeTalkReply({ profile: { trainer_id: "skinny", interaction_mode: "support", address_form: "informal", grammatical_gender: "feminine" }, messages: [], apiKey: "", model: "test" });
   assert.match(reply, /тебе/);
   assert.doesNotMatch(reply, /Вы вернулись/);
+});
+
+
+test("urgency guard distinguishes pressure from ordinary short-term wording", () => {
+  assert.equal(validateTrainerReply("Краткосрочное отвлечение ещё не объясняет всю ситуацию. Можно разобрать один эпизод и выбрать посильный шаг.").ok, true);
+  assert.ok(validateTrainerReply("Сделайте шаг прямо сейчас. Иначе будет хуже.").violations.includes("fake_urgency"));
 });

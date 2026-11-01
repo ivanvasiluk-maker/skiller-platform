@@ -146,6 +146,21 @@ assert.equal((await reminderExport.json()).reminders.length, 1);
 assert.equal((await post('/api/reminders', { action: 'disableAll' })).status, 200);
 assert.deepEqual((await (await send('/api/reminders', { headers: { cookie } })).json()).items, []);
 
+const uncertainCookie = await guest();
+await command({ action: 'onboard', name: 'Synthetic uncertainty', trainerId: 'beck', text: 'Хочу научиться делать паузу', consent: true }, uncertainCookie);
+const uncertain = await command({ action: 'message', mode: 'talk', text: 'Не уверен, что могу сейчас оставаться в безопасности' }, uncertainCookie);
+assert.equal(uncertain.profile.safety_flag, 1, 'Natural-language safety uncertainty must stop the real message route');
+assert.equal(uncertain.plans.length, 0, 'Safety uncertainty must not create a practice');
+assert.match(uncertain.messages.at(-1).text, /не является экстренной службой/);
+
+for (const text of ['Уже три ночи почти не сплю, ощущаю всемогущество, собираюсь всё вложить в проект', 'Кажется, за мной следят, и я должен срочно защищаться']) {
+  const riskCookie = await guest();
+  await command({ action: 'onboard', name: 'Synthetic support', trainerId: 'marsha', text: 'Хочу найти посильный шаг', consent: true }, riskCookie);
+  const paused = await command({ action: 'message', mode: 'talk', text }, riskCookie);
+  assert.equal(paused.profile.safety_flag, 1);
+  assert.equal(paused.plans.length, 0);
+}
+
 const privateCookie = cookie;
 const privacy = await post('/api/privacy', { confirmation: 'УДАЛИТЬ' });
 assert.equal(privacy.status, 202);
