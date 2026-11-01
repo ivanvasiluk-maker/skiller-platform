@@ -1,7 +1,7 @@
 import { systemPrompt, type CommunicationPreferences } from "./communication-preferences.ts";
 export const PRODUCT_VERSION = "frozen-mvp-1.0";
 // Версия поведения персонажей = версия Character Bible (lib/character-bible.ts).
-export const CHARACTER_VERSION = "1.3";
+export const CHARACTER_VERSION = "1.4";
 export const trainers = {
   marsha: {
     name: "Марша", withName: "с Маршей", initial: "М", color: "#31796a", background: "#e7f1eb", symbol: "◡",

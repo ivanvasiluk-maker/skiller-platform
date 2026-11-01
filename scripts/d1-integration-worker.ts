@@ -590,7 +590,7 @@ async function runOnboardingFlow(db: D1Database) {
     eventNames: events.results.map((row) => row.event_name),
     allVersioned: events.results.every((row) => {
       const payload = JSON.parse(row.payload_json);
-      return payload.product_version === "frozen-mvp-1.0" && payload.character_version === "1.3";
+      return payload.product_version === "frozen-mvp-1.0" && payload.character_version === "1.4";
     }),
     cohortKey: cohort?.cohort_key ?? null,
   };

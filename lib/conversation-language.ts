@@ -20,8 +20,9 @@ export type AttemptReport = "done" | "partial" | "not_done" | "question" | "refu
 export function conversationIntent(text: string): ConversationIntent {
   const compact = text.replace(/\s+/g, " ").trim().toLowerCase();
   const asksForAction = /(?:что|как)\s+(?:мне\s+)?(?:сейчас\s+)?(?:делать|сделать|начать|успокоиться|не\s+сорваться)|помоги(?:те)?\s+(?:мне\s+)?начать/u.test(compact);
+  const asksForStep = /(?:дай|дайте|предложи|предложите)\s+(?:мне\s+)?(?:один\s+)?(?:посильный\s+|маленький\s+|первый\s+)?шаг/u.test(compact);
   const urgentAction = /(?:мне\s+)?нужно\s+(?:сделать|закончить|начать).{0,80}(?:сегодня|сейчас)|завтра\s+дедлайн/u.test(compact);
-  return asksForAction || urgentAction ? "direct_action_request" : "explore";
+  return asksForAction || asksForStep || urgentAction ? "direct_action_request" : "explore";
 }
 
 export function extractShortTrigger(text: string): string {

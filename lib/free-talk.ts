@@ -4,6 +4,7 @@ import { communicationInstructions, type CommunicationPreferences } from "./comm
 // fetch инъецируется для тестов и интеграционных сценариев (timeout/malformed/hostile).
 
 import { z } from "zod";
+import { conversationIntent } from "./conversation-language.ts";
 import type { InteractionMode } from "./trainers.ts";
 import {
   buildFreeTalkFallback,
@@ -30,7 +31,12 @@ export async function produceFreeTalkReply(input: {
   instructionsOverride?: string;
 }): Promise<string> {
   const bible = getCharacterBible(input.profile.trainer_id);
-  const fallback = input.profile.address_form === "informal"
+  const latestUserText = [...input.messages].reverse().find(message => message.role === "user")?.text ?? "";
+  const taskStartRequested = conversationIntent(latestUserText) === "direct_action_request" && /начать|дело|задач|отч[её]т|документ|письмо/i.test(latestUserText);
+  // A proposed preparation step, not a Skill Engine plan, attempt or completed outcome.
+  const fallback = taskStartRequested
+    ? "Можно начать с одного шага: открыть документ или материал по делу и оставить его перед собой. Это только подготовительный шаг; выполнять всё дело пока не требуется."
+    : input.profile.address_form === "informal"
     ? "Можно продолжить с текущего места. Что тебе сейчас полезнее: разговор, разбор одного эпизода или маленькое действие?"
     : buildFreeTalkFallback(bible);
   // Модуль должен работать и в Node (Next runtime), и в чистом workerd

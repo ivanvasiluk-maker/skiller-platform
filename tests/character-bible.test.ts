@@ -185,3 +185,14 @@ test("urgency guard distinguishes pressure from ordinary short-term wording", ()
   assert.equal(validateTrainerReply("Краткосрочное отвлечение ещё не объясняет всю ситуацию. Можно разобрать один эпизод и выбрать посильный шаг.").ok, true);
   assert.ok(validateTrainerReply("Сделайте шаг прямо сейчас. Иначе будет хуже.").violations.includes("fake_urgency"));
 });
+
+
+test("direct task-start request receives an actionable fallback without a menu or invented attempt", async () => {
+  const { produceFreeTalkReply } = await import("../lib/free-talk.ts");
+  for (const trainer_id of TRAINER_IDS) {
+    const reply = await produceFreeTalkReply({ profile: { trainer_id, interaction_mode: "explore", address_form: "formal" }, messages: [{ role: "user", text: "Откладываю отчёт. Дайте один посильный шаг." }], apiKey: "", model: "test" });
+    assert.match(reply, /открыть документ/);
+    assert.doesNotMatch(reply, /\?|Что сейчас было бы полезнее|Вы уже|Вы сделали|результат сохранён/);
+    assert.equal(validateTrainerReply(reply).ok, true);
+  }
+});
