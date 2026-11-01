@@ -1,0 +1,80 @@
+{
+  "schemaVersion": 1,
+  "commitSha": null,
+  "treeSha": null,
+  "reminderChannel": "in_app",
+  "checks": {
+    "ci": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "migrationRecovery": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "browserAcceptance": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "productionRestore": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "productionBinding": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "externalAutodeployDisabled": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "liveModelReview": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "realDeviceVoice": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "offerAndAccess": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "costMonitoring": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "rollbackPlan": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    },
+    "ownerRelease": {
+      "status": "pending",
+      "reference": "",
+      "reviewedBy": "",
+      "reviewedAt": ""
+    }
+  }
+}

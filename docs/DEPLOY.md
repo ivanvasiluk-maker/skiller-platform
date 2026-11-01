@@ -9,7 +9,11 @@
 - `npm run verify` зелёный локально;
 - `wrangler login` выполнен (`npx wrangler login`).
 
-## 1. Создать production D1
+## 1. Production D1: существующая база или новое окружение
+
+Обновление существующего SKILLER использует его проверенную production D1. Не создавать замену базы и не менять binding ради нового выпуска. Сначала проверить текущие binding/ledger и восстановление настоящей копии в изолированную среду.
+
+Только при первоначальном создании отдельного окружения:
 
 ```bash
 npx wrangler d1 create skiller-d1-prod
@@ -48,10 +52,20 @@ npx wrangler secret put EXPORT_CRON_SECRET --config wrangler.production.jsonc
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | JSON service account с доступом к таблице (`client_email`, `private_key`). |
 | `EXPORT_CRON_SECRET` | Bearer для `POST /api/export`. |
 
-## 4. Деплой
+## 4. Принятый кандидат и деплой
+
+Подготовка описана в [S08](release/S08_RELEASE_CANDIDATE_2026_11_01.md). Выбрать точный публичный release SHA и получить чистый checkout именно этого коммита. Скопировать [шаблон](release/release-evidence.example.json) за пределы отслеживаемых исходников (например, в игнорируемый outputs), указать HEAD/tree и реальные ссылки, проверяющих и даты для всех применимых гейтов. Не заменять pending на passed без выполненной проверки.
 
 ```bash
-npm run deploy -- --confirm-production=skiller-platform
+npm run release:check -- --release-evidence=/absolute/path/release-evidence.json
+```
+
+Это read-only проверка формы доказательств, SHA/tree и чистоты checkout. Она не запрашивает облако, не подтверждает содержимое ссылок и не является независимым аудитом отметок оператора. Отсутствующий/неполный файл блокирует deploy до build и удалённых команд. Для внешних напоминаний требуется дополнительная приёмка доставки; in_app не обещает уведомления в закрытом приложении. CI deploy по-прежнему запрещён.
+
+Только после принятия условий выпуска:
+
+```bash
+npm run deploy -- --confirm-production=skiller-platform --release-evidence=/absolute/path/release-evidence.json
 ```
 
 Скрипт: `build` → `d1 migrations apply --remote` → `wrangler deploy`.

@@ -6,6 +6,7 @@
 //   1. npm run deploy:check  — проверить, что конфиг заполнен
 //   2. npm run deploy        — build + migrations + deploy
 
+import { assertReleaseFile } from "./release-evidence.mjs";
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -75,6 +76,8 @@ if (subcommand !== "deploy") {
 if (process.env.CI || !process.argv.includes("--confirm-production=skiller-platform")) {
   throw new Error("Production deploy refused: run manually with --confirm-production=skiller-platform after owner approval; CI is forbidden.");
 }
+const evidenceFile = process.argv.find(arg => arg.startsWith("--release-evidence="))?.slice("--release-evidence=".length);
+const acceptedCandidate = assertReleaseFile(evidenceFile, projectRoot);
 const { database } = assertProductionConfig();
 const run = (args, label) => {
   console.log(`\n=== ${label} ===`);
@@ -86,9 +89,11 @@ const run = (args, label) => {
 };
 
 console.log("Deploying to production D1:", database.database_name, database.database_id);
-console.log("Explicit production confirmation received.");
+console.log("Accepted release commit:", acceptedCandidate.commitSha);
 
 run(["node_modules/vinext/dist/cli.js", "build"], "build production bundle");
+// Build tooling must not silently alter the reviewed tracked/untracked source.
+assertReleaseFile(evidenceFile, projectRoot);
 run([wranglerPath, "d1", "migrations", "apply", database.database_name, "--remote", "--config", configPath], "apply D1 migrations (remote)");
 run([wranglerPath, "deploy", "--config", configPath], "deploy worker");
 
